@@ -2,18 +2,18 @@ package state
 
 import (
 	"encoding/json"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/syndtr/goleveldb/leveldb"
 )
 
+// StateDB is de low-level LevelDB wrapper.
 type StateDB struct {
 	db *leveldb.DB
 }
 
-// ------------------------------------------------------------
-// Open / Close
-// ------------------------------------------------------------
+// NewStateDB opent de LevelDB op de gegeven path.
 func NewStateDB(path string) (*StateDB, error) {
 	db, err := leveldb.OpenFile(path, nil)
 	if err != nil {
@@ -22,15 +22,15 @@ func NewStateDB(path string) (*StateDB, error) {
 	return &StateDB{db: db}, nil
 }
 
-func (s *StateDB) Close() {
+// Close sluit de DB.
+func (s *StateDB) Close() error {
 	if s.db != nil {
-		s.db.Close()
+		return s.db.Close()
 	}
+	return nil
 }
 
-// ------------------------------------------------------------
-// Load / Save Accounts
-// ------------------------------------------------------------
+// SaveAccount slaat een account op onder key = address.Hex().
 func (s *StateDB) SaveAccount(acc *Account) error {
 	data, err := json.Marshal(acc)
 	if err != nil {
@@ -39,9 +39,11 @@ func (s *StateDB) SaveAccount(acc *Account) error {
 	return s.db.Put([]byte(acc.Address.Hex()), data, nil)
 }
 
+// GetAccount laadt een account, of maakt een nieuwe lege als hij niet bestaat.
 func (s *StateDB) GetAccount(addr common.Address) (*Account, error) {
-	bytes, err := s.db.Get([]byte(addr.Hex()), nil)
+	data, err := s.db.Get([]byte(addr.Hex()), nil)
 	if err == leveldb.ErrNotFound {
+		// nieuw lege account
 		return NewAccount(addr), nil
 	}
 	if err != nil {
@@ -49,32 +51,13 @@ func (s *StateDB) GetAccount(addr common.Address) (*Account, error) {
 	}
 
 	var acc Account
-	if err := json.Unmarshal(bytes, &acc); err != nil {
+	if err := json.Unmarshal(data, &acc); err != nil {
 		return nil, err
 	}
 
+	if acc.Balance == nil {
+		acc.Balance = big.NewInt(0)
+	}
+
 	return &acc, nil
-}
-
-// ------------------------------------------------------------
-// Compute StateRoot (simple hash)
-// ------------------------------------------------------------
-func (s *StateDB) RootHash() (common.Hash, error) {
-	iter := s.db.NewIterator(nil, nil)
-	defer iter.Release()
-
-	combined := []byte{}
-
-	for iter.Next() {
-		key := iter.Key()
-		val := iter.Value()
-		combined = append(combined, key...)
-		combined = append(combined, val...)
-	}
-
-	if err := iter.Error(); err != nil {
-		return common.Hash{}, err
-	}
-
-	return common.BytesToHash(combined), nil
 }

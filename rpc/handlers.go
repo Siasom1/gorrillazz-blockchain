@@ -19,6 +19,7 @@ type RPCHandlers struct {
 // ---------------------------------------------------------------
 // REGISTER METHODS
 // ---------------------------------------------------------------
+
 func NewHandlers(chain *blockchain.Blockchain) map[string]RPCHandler {
 	h := &RPCHandlers{Chain: chain}
 
@@ -44,6 +45,7 @@ func NewHandlers(chain *blockchain.Blockchain) map[string]RPCHandler {
 // ---------------------------------------------------------------
 // GORR RPC IMPLEMENTATION
 // ---------------------------------------------------------------
+
 func (h *RPCHandlers) blockNumber(params []interface{}) (interface{}, error) {
 	return h.Chain.Head().Header.Number, nil
 }
@@ -69,6 +71,7 @@ func (h *RPCHandlers) getBlockByNumber(params []interface{}) (interface{}, error
 // ---------------------------------------------------------------
 // ETHEREUM COMPATIBLE RPC IMPLEMENTATION
 // ---------------------------------------------------------------
+
 func (h *RPCHandlers) ethChainId(params []interface{}) (interface{}, error) {
 	return fmt.Sprintf("0x%x", h.Chain.NetworkID()), nil
 }
@@ -171,6 +174,7 @@ func (h *RPCHandlers) ethGetTransactionByHash(params []interface{}) (interface{}
 // ------------------------------
 // BALANCE
 // ------------------------------
+
 func (h *RPCHandlers) ethGetBalance(params []interface{}) (interface{}, error) {
 	if len(params) < 1 {
 		return nil, errors.New("missing address")
@@ -189,6 +193,7 @@ func (h *RPCHandlers) ethGetBalance(params []interface{}) (interface{}, error) {
 // ------------------------------
 // NONCE
 // ------------------------------
+
 func (h *RPCHandlers) ethGetTransactionCount(params []interface{}) (interface{}, error) {
 	if len(params) < 1 {
 		return nil, errors.New("missing address")
@@ -206,6 +211,7 @@ func (h *RPCHandlers) ethGetTransactionCount(params []interface{}) (interface{},
 // ---------------------------------------------------------------
 // eth_sendRawTransaction — Accept signed RLP encoded tx
 // ---------------------------------------------------------------
+
 func (h *RPCHandlers) ethSendRawTransaction(params []interface{}) (interface{}, error) {
 	if len(params) < 1 {
 		return nil, errors.New("missing raw transaction data")
@@ -226,16 +232,13 @@ func (h *RPCHandlers) ethSendRawTransaction(params []interface{}) (interface{}, 
 		return nil, err
 	}
 
-	// VALIDATE TX
 	if err := tx.Validate(); err != nil {
 		return nil, err
 	}
 
-	// ADD TO TX POOL
 	if err := h.Chain.TxPool.Add(tx); err != nil {
 		return nil, err
 	}
 
-	// RETURN TX HASH
 	return tx.Hash().Hex(), nil
 }

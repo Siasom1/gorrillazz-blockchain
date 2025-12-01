@@ -1,49 +1,25 @@
+// core/types/genesis.go
 package types
 
 import (
-	"encoding/json"
-	"math/big"
-
-	// "time"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 )
 
-type GenesisAlloc struct {
-	Address common.Address
-	Balance *big.Int
-}
-
-type GenesisData struct {
-	Alloc []GenesisAlloc `json:"alloc"`
-}
-
-// func NewGenesisBlock() *Block {
-// 	return &Block{
-// 		Header: &Header{
-// 			ParentHash: common.Hash{},
-// 			Number:     0,
-// 			Time:       uint64(time.Now().Unix()),
-// 			StateRoot:  common.Hash{},
-// 			TxRoot:     common.Hash{},
-// 		},
-// 		Transactions: []*Transaction{},
-// 	}
-// }
-
-func NewGenesisAlloc(gorrAddr, usdAddr common.Address) *GenesisData {
-	gorrAmount := new(big.Int).Mul(big.NewInt(10_000_000_000), big.NewInt(1e18))
-	usdAmount := new(big.Int).Mul(big.NewInt(10_000_000_000), big.NewInt(1e6))
-
-	return &GenesisData{
-		Alloc: []GenesisAlloc{
-			{Address: gorrAddr, Balance: gorrAmount},
-			{Address: usdAddr, Balance: usdAmount},
-		},
+// NewGenesisBlock maakt block #0 met lege roots en geen transacties.
+// Alloc van balances doen we in de State (LevelDB), niet in dit block zelf.
+func NewGenesisBlock() *Block {
+	header := &Header{
+		ParentHash: common.Hash{}, // geen parent
+		Number:     0,             // genesis block
+		Time:       uint64(time.Now().Unix()),
+		StateRoot:  common.Hash{}, // voorlopig 0, echte root later
+		TxRoot:     common.Hash{}, // geen tx's
 	}
-}
 
-func (g *GenesisData) JSON() []byte {
-	out, _ := json.MarshalIndent(g, "", "  ")
-	return out
+	return &Block{
+		Header:       header,
+		Transactions: []*Transaction{},
+	}
 }

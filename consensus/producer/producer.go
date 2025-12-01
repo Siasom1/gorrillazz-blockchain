@@ -54,6 +54,7 @@ func (bp *BlockProducer) Stop() {
 // ---------------------------------------------------------
 // Produce a new block
 // ---------------------------------------------------------
+
 func (bp *BlockProducer) produceBlock() {
 	head := bp.chain.Head()
 
@@ -68,21 +69,16 @@ func (bp *BlockProducer) produceBlock() {
 		Transactions: []*types.Transaction{},
 	}
 
-	// A list of receipts for this block
 	receipts := []*types.Receipt{}
 
-	// ---------------------------------------------------------
-	// 1. PROCESS PENDING TRANSACTIONS
-	// ---------------------------------------------------------
 	pending := bp.chain.TxPool.Pending()
 
 	for _, tx := range pending {
-		// Publish tx event (mempool)
+		// Eventbus: tx in mempool
 		if bp.events != nil {
 			bp.events.PublishTx(tx)
 		}
 
-		// Recover the sender
 		from, err := tx.From()
 		if err != nil {
 			bp.logger.Error("Invalid tx signature: " + err.Error())
@@ -90,30 +86,51 @@ func (bp *BlockProducer) produceBlock() {
 			continue
 		}
 
-		// Check sender balance
-		senderBal, _ := bp.chain.State.GetBalance(from)
+		// Sender balance
+		senderBal, err := bp.chain.State.GetBalance(from)
+		if err != nil {
+			bp.logger.Error("Failed to load sender balance: " + err.Error())
+			bp.chain.TxPool.Remove(tx)
+			continue
+		}
+
 		if senderBal.Cmp(tx.Value) < 0 {
 			bp.logger.Error("TX rejected: insufficient funds")
 			bp.chain.TxPool.Remove(tx)
 			continue
 		}
 
-		// Decrease sender balance
+		// Update balances
 		newSenderBal := new(big.Int).Sub(senderBal, tx.Value)
-		bp.chain.State.SetBalance(from, newSenderBal)
+		if err := bp.chain.State.SetBalance(from, newSenderBal); err != nil {
+			bp.logger.Error("Failed to update sender balance: " + err.Error())
+			bp.chain.TxPool.Remove(tx)
+			continue
+		}
 
-		// Increase receiver balance
-		receiverBal, _ := bp.chain.State.GetBalance(*tx.To)
+		receiverBal, err := bp.chain.State.GetBalance(*tx.To)
+		if err != nil {
+			bp.logger.Error("Failed to load receiver balance: " + err.Error())
+			bp.chain.TxPool.Remove(tx)
+			continue
+		}
+
 		newReceiverBal := new(big.Int).Add(receiverBal, tx.Value)
-		bp.chain.State.SetBalance(*tx.To, newReceiverBal)
+		if err := bp.chain.State.SetBalance(*tx.To, newReceiverBal); err != nil {
+			bp.logger.Error("Failed to update receiver balance: " + err.Error())
+			bp.chain.TxPool.Remove(tx)
+			continue
+		}
 
-		// Increase nonce
-		bp.chain.State.IncreaseNonce(from)
+		// Nonce
+		if err := bp.chain.State.IncreaseNonce(from); err != nil {
+			bp.logger.Error("Failed to increase nonce: " + err.Error())
+			bp.chain.TxPool.Remove(tx)
+			continue
+		}
 
-		// Transaction index inside the new block
 		txIndex := uint64(len(newBlock.Transactions))
 
-		// Build receipt
 		receipt := &types.Receipt{
 			TxHash:           tx.Hash(),
 			BlockHash:        newBlock.Hash(),
@@ -122,49 +139,35 @@ func (bp *BlockProducer) produceBlock() {
 			From:             from,
 			To:               *tx.To,
 			GasUsed:          tx.Gas,
-			Status:           1, // success
+			Status:           1,
 		}
 
-		// Save TX → Block index
 		if err := bp.chain.SaveTxIndex(tx.Hash(), newBlock.Header.Number); err != nil {
 			bp.logger.Error("Failed to save tx index: " + err.Error())
 		}
 
-		// Add tx to block
 		newBlock.Transactions = append(newBlock.Transactions, tx)
-
-		// Add receipt
 		receipts = append(receipts, receipt)
 
-		// Remove from pool
 		bp.chain.TxPool.Remove(tx)
 	}
 
-	// ---------------------------------------------------------
-	// 2. SAVE NEW BLOCK
-	// ---------------------------------------------------------
+	// Save new head
 	if err := bp.chain.SetHead(newBlock); err != nil {
 		bp.logger.Error("Failed to save block: " + err.Error())
 		return
 	}
 
-	// ---------------------------------------------------------
-	// 3. SAVE RECEIPTS FOR THIS BLOCK
-	// ---------------------------------------------------------
+	// Save receipts
 	if err := bp.chain.SaveReceipts(newBlock.Header.Number, receipts); err != nil {
 		bp.logger.Error("Failed to save receipts: " + err.Error())
 	}
 
-	// ---------------------------------------------------------
-	// 4. PUBLISH BLOCK EVENT
-	// ---------------------------------------------------------
+	// Eventbus: new block
 	if bp.events != nil {
 		bp.events.PublishBlock(newBlock)
 	}
 
-	// ---------------------------------------------------------
-	// LOG
-	// ---------------------------------------------------------
 	bp.logger.Info(
 		fmt.Sprintf(
 			"Produced block #%d | %d txs | Hash=%s",
