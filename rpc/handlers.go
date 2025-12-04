@@ -39,6 +39,8 @@ func NewHandlers(chain *blockchain.Blockchain) map[string]RPCHandler {
 		"eth_sendRawTransaction":    h.ethSendRawTransaction,
 		"eth_getTransactionReceipt": h.ethGetTransactionReceipt,
 		"eth_getTransactionByHash":  h.ethGetTransactionByHash,
+		"gorr_getUSDCcBalance":      h.gorrGetUSDCcBalance,
+		"gorr_getBalances":          h.gorrGetBalances,
 	}
 }
 
@@ -241,4 +243,61 @@ func (h *RPCHandlers) ethSendRawTransaction(params []interface{}) (interface{}, 
 	}
 
 	return tx.Hash().Hex(), nil
+}
+
+// ---------------------------------------------------------------
+// gorr_getUSDCcBalance(address)
+// ---------------------------------------------------------------
+func (h *RPCHandlers) gorrGetUSDCcBalance(params []interface{}) (interface{}, error) {
+	if len(params) < 1 {
+		return nil, errors.New("missing address")
+	}
+
+	addrHex, ok := params[0].(string)
+	if !ok {
+		return nil, errors.New("address must be string")
+	}
+
+	addr := common.HexToAddress(addrHex)
+
+	bal, err := h.Chain.State.GetUSDCcBalance(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Return Ethereum-style hex WEI value
+	return fmt.Sprintf("0x%x", bal), nil
+}
+
+// ---------------------------------------------------------------
+// gorr_getBalances(address)  → { "GORR": "0x..", "USDCc": "0x.." }
+// ---------------------------------------------------------------
+func (h *RPCHandlers) gorrGetBalances(params []interface{}) (interface{}, error) {
+	if len(params) < 1 {
+		return nil, errors.New("missing address")
+	}
+
+	addrHex, ok := params[0].(string)
+	if !ok {
+		return nil, errors.New("address must be string")
+	}
+
+	addr := common.HexToAddress(addrHex)
+
+	// ---- GORR ----
+	gorrBal, err := h.Chain.State.GetBalance(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	// ---- USDCc ----
+	usdcBal, err := h.Chain.State.GetUSDCcBalance(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]string{
+		"GORR":  fmt.Sprintf("0x%x", gorrBal),
+		"USDCc": fmt.Sprintf("0x%x", usdcBal),
+	}, nil
 }

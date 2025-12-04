@@ -6,12 +6,10 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// State is een hogere-level wrapper rond StateDB met makkelijke helpers.
 type State struct {
 	db *StateDB
 }
 
-// NewState opent StateDB en wrapped deze in State.
 func NewState(path string) (*State, error) {
 	db, err := NewStateDB(path)
 	if err != nil {
@@ -22,23 +20,50 @@ func NewState(path string) (*State, error) {
 
 func (s *State) Close() error {
 	if s.db != nil {
-		return s.db.Close()
+		s.db.Close()
 	}
 	return nil
 }
 
-// ------------------- READ ---------------------
+// ---------------- GORR ----------------
 
 func (s *State) GetBalance(addr common.Address) (*big.Int, error) {
 	acc, err := s.db.GetAccount(addr)
 	if err != nil {
 		return nil, err
 	}
-	if acc.Balance == nil {
-		acc.Balance = big.NewInt(0)
-	}
-	return acc.Balance, nil
+	return new(big.Int).Set(acc.Balances["GORR"]), nil
 }
+
+func (s *State) SetBalance(addr common.Address, amount *big.Int) error {
+	acc, err := s.db.GetAccount(addr)
+	if err != nil {
+		return err
+	}
+	acc.Balances["GORR"] = new(big.Int).Set(amount)
+	return s.db.SaveAccount(acc)
+}
+
+// ---------------- USDCc ----------------
+
+func (s *State) GetUSDCcBalance(addr common.Address) (*big.Int, error) {
+	acc, err := s.db.GetAccount(addr)
+	if err != nil {
+		return nil, err
+	}
+	return new(big.Int).Set(acc.Balances["USDCc"]), nil
+}
+
+func (s *State) SetUSDCcBalance(addr common.Address, amount *big.Int) error {
+	acc, err := s.db.GetAccount(addr)
+	if err != nil {
+		return err
+	}
+	acc.Balances["USDCc"] = new(big.Int).Set(amount)
+	return s.db.SaveAccount(acc)
+}
+
+// ---------------- NONCE ----------------
 
 func (s *State) GetNonce(addr common.Address) (uint64, error) {
 	acc, err := s.db.GetAccount(addr)
@@ -46,23 +71,6 @@ func (s *State) GetNonce(addr common.Address) (uint64, error) {
 		return 0, err
 	}
 	return acc.Nonce, nil
-}
-
-// ------------------- WRITE ---------------------
-
-func (s *State) SetBalance(addr common.Address, amount *big.Int) error {
-	acc, err := s.db.GetAccount(addr)
-	if err != nil {
-		return err
-	}
-
-	if amount == nil {
-		amount = big.NewInt(0)
-	}
-
-	// kopie zodat callers de pointer niet per ongeluk muteren
-	acc.Balance = new(big.Int).Set(amount)
-	return s.db.SaveAccount(acc)
 }
 
 func (s *State) IncreaseNonce(addr common.Address) error {

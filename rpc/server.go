@@ -2,111 +2,104 @@ package rpc
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+
+	"github.com/Siasom1/gorrillazz-chain/core/blockchain"
 )
 
-type RPCServer struct {
-	addr     string
-	handlers map[string]RPCHandler
-	server   *http.Server
-}
-
+// RPCHandler is a function that handles a single RPC method.
 type RPCHandler func(params []interface{}) (interface{}, error)
 
-type request struct {
+type RPCServer struct {
+	handlers map[string]RPCHandler
+}
+
+// StartRPCServer starts the JSON-RPC server on a given port.
+func StartRPCServer(port int, chain *blockchain.Blockchain) {
+	handlers := NewHandlers(chain)
+
+	log.Println("--------- RPC HANDLERS REGISTERED ---------")
+	for name := range handlers {
+		log.Println("RPC method available:", name)
+	}
+	log.Println("-------------------------------------------")
+
+	s := &RPCServer{
+		handlers: handlers,
+	}
+
+	http.HandleFunc("/", s.handle)
+
+	addr := fmt.Sprintf(":%d", port)
+	log.Printf("[RPC] Started JSON-RPC server at %s\n", addr)
+	go http.ListenAndServe(addr, nil)
+}
+
+type rpcRequest struct {
 	JSONRPC string        `json:"jsonrpc"`
 	Method  string        `json:"method"`
 	Params  []interface{} `json:"params"`
-	ID      int           `json:"id"`
+	ID      interface{}   `json:"id"`
 }
 
-type response struct {
+type rpcResponse struct {
 	JSONRPC string      `json:"jsonrpc"`
 	Result  interface{} `json:"result,omitempty"`
 	Error   interface{} `json:"error,omitempty"`
-	ID      int         `json:"id"`
+	ID      interface{} `json:"id"`
 }
 
-func NewRPCServer(host string, handlers map[string]RPCHandler) *RPCServer {
-	return &RPCServer{
-		addr:     host,
-		handlers: handlers,
-	}
-}
-
-func (s *RPCServer) Start() error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleRequest)
-
-	s.server = &http.Server{
-		Addr:    s.addr,
-		Handler: mux,
-	}
-
-	go func() {
-		log.Println("[RPC] Started JSON-RPC server at", s.addr)
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Println("[RPC] Error:", err)
-		}
-	}()
-
-	return nil
-}
-
-func (s *RPCServer) Stop() {
-	if s.server != nil {
-		s.server.Close()
-	}
-}
-
-func (s *RPCServer) handleRequest(w http.ResponseWriter, r *http.Request) {
+func (s *RPCServer) handle(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
+		writeRPCError(w, nil, "invalid body")
 		return
 	}
 
-	var req request
+	var req rpcRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+		writeRPCError(w, nil, "invalid JSON")
 		return
 	}
+
+	// LOGGING: see what the client calls
+	log.Println("[RPC] Incoming method:", req.Method)
 
 	handler, ok := s.handlers[req.Method]
 	if !ok {
-		writeError(w, req.ID, "method not found")
+		log.Println("[RPC] Unknown method:", req.Method)
+		writeRPCError(w, req.ID, "method not found")
 		return
 	}
 
 	result, err := handler(req.Params)
 	if err != nil {
-		writeError(w, req.ID, err.Error())
+		writeRPCError(w, req.ID, err.Error())
 		return
 	}
 
-	writeResult(w, req.ID, result)
-}
-
-func writeResult(w http.ResponseWriter, id int, result interface{}) {
-	resp := response{
+	resp := rpcResponse{
 		JSONRPC: "2.0",
 		Result:  result,
-		ID:      id,
+		ID:      req.ID,
 	}
-	bytes, _ := json.Marshal(resp)
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(bytes)
+
+	writeJSON(w, resp)
 }
 
-func writeError(w http.ResponseWriter, id int, err string) {
-	resp := response{
+func writeJSON(w http.ResponseWriter, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
+func writeRPCError(w http.ResponseWriter, id interface{}, msg string) {
+	resp := rpcResponse{
 		JSONRPC: "2.0",
-		Error:   err,
+		Error:   msg,
 		ID:      id,
 	}
-	bytes, _ := json.Marshal(resp)
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(bytes)
+	writeJSON(w, resp)
 }

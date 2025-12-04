@@ -19,26 +19,87 @@ import (
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
+//
 // --------------------------------------------------------
-// Config
+// Deterministic DEV wallets (Admin + Treasury)
 // --------------------------------------------------------
 
-// LET OP: deze seed is ALLEEN voor dev.
-// Vervang dit in productie door een veilige seed of env-var.
 const genesisSeedPhrase = "GORRILLAZZ DEV SEED PHRASE - CHANGE ME IN PRODUCTION"
 
-type walletJSON struct {
-	Address    string `json:"address"`
-	PrivateKey string `json:"privateKey"` // hex, zonder 0x
+type Wallet struct {
+	Address    common.Address `json:"address"`
+	PrivateKey string         `json:"privateKey"` // hex
 }
 
-type genesisWallets struct {
-	Admin    walletJSON `json:"admin"`
-	Treasury walletJSON `json:"treasury"`
+type WalletsFile struct {
+	Admin    Wallet `json:"admin"`
+	Treasury Wallet `json:"treasury"`
 }
 
+// Derive deterministic private key
+func deriveKey(seed string, index uint32) (*ecdsa.PrivateKey, common.Address) {
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s-%d", seed, index)))
+	d := new(big.Int).SetBytes(hash[:])
+
+	curve := gethcrypto.S256()
+	nMinusOne := new(big.Int).Sub(curve.Params().N, big.NewInt(1))
+	d.Mod(d, nMinusOne)
+	d.Add(d, big.NewInt(1))
+
+	priv := &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{Curve: curve},
+		D:         d,
+	}
+	priv.PublicKey.X, priv.PublicKey.Y = curve.ScalarBaseMult(d.Bytes())
+
+	address := gethcrypto.PubkeyToAddress(priv.PublicKey)
+
+	return priv, address
+}
+
+// Load or create wallets.json
+func loadSystemWallets(datadir string) (WalletsFile, error) {
+	path := filepath.Join(datadir, "wallets.json")
+
+	// Exists? Load it.
+	if _, err := os.Stat(path); err == nil {
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			return WalletsFile{}, err
+		}
+		var w WalletsFile
+		if err := json.Unmarshal(bytes, &w); err != nil {
+			return WalletsFile{}, err
+		}
+		return w, nil
+	}
+
+	// Otherwise generate deterministic wallets
+	fmt.Println("[GENESIS] Creating Admin + Treasury wallets")
+
+	adminPriv, adminAddr := deriveKey(genesisSeedPhrase, 0)
+	trePriv, treAddr := deriveKey(genesisSeedPhrase, 1)
+
+	w := WalletsFile{
+		Admin: Wallet{
+			Address:    adminAddr,
+			PrivateKey: hex.EncodeToString(gethcrypto.FromECDSA(adminPriv)),
+		},
+		Treasury: Wallet{
+			Address:    treAddr,
+			PrivateKey: hex.EncodeToString(gethcrypto.FromECDSA(trePriv)),
+		},
+	}
+
+	bytes, _ := json.MarshalIndent(w, "", "  ")
+	_ = os.WriteFile(path, bytes, 0o600)
+
+	return w, nil
+}
+
+//
 // --------------------------------------------------------
-// Blockchain struct
+// Blockchain Struct
 // --------------------------------------------------------
 
 type Blockchain struct {
@@ -50,35 +111,7 @@ type Blockchain struct {
 	TxPool *txpool.TxPool
 }
 
-// --------------------------------------------------------
-// Helper: deterministische private key uit seed + index
-// --------------------------------------------------------
-
-func derivePrivKeyFromSeed(seed string, index uint32) (*ecdsa.PrivateKey, error) {
-	h := sha256.Sum256([]byte(fmt.Sprintf("%s-%d", seed, index)))
-	d := new(big.Int).SetBytes(h[:])
-
-	curve := gethcrypto.S256()
-	nMinusOne := new(big.Int).Sub(curve.Params().N, big.NewInt(1))
-
-	// 1 <= d < N
-	d.Mod(d, nMinusOne)
-	d.Add(d, big.NewInt(1))
-
-	priv := &ecdsa.PrivateKey{
-		PublicKey: ecdsa.PublicKey{
-			Curve: curve,
-		},
-		D: d,
-	}
-	priv.PublicKey.X, priv.PublicKey.Y = curve.ScalarBaseMult(d.Bytes())
-	return priv, nil
-}
-
-func privKeyToHex(pk *ecdsa.PrivateKey) string {
-	return hex.EncodeToString(gethcrypto.FromECDSA(pk))
-}
-
+//
 // --------------------------------------------------------
 // Constructor
 // --------------------------------------------------------
@@ -89,116 +122,98 @@ func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 		networkID: networkID,
 	}
 
-	if err := os.MkdirAll(bc.dataDir, os.ModePerm); err != nil {
-		return nil, err
-	}
+	os.MkdirAll(bc.dataDir, 0o755)
 
-	// State DB
+	// Load state DB
 	st, err := state.NewState(filepath.Join(dataDir, "state"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to open state db: %v", err)
+		return nil, fmt.Errorf("failed to load state db: %v", err)
 	}
 	bc.State = st
 
-	// TxPool
+	// Load TxPool
 	bc.TxPool = txpool.NewTxPool()
 
-	// Head
+	// Load HEAD
 	head, err := bc.loadHead()
 	if err != nil {
 		return nil, err
 	}
 
+	// --------------------------------------------------------
+	// GENESIS
+	// --------------------------------------------------------
 	if head == nil {
-		// ------------------------------------------------
-		// FIRST START → GENESIS
-		// ------------------------------------------------
-		fmt.Println("[GENESIS] No existing blockchain, creating new genesis block...")
+		fmt.Println("[GENESIS] No existing blockchain, creating genesis block...")
 
-		// 1) Admin + Treasury keys/wallets (deterministisch uit seed)
-		adminKey, err := derivePrivKeyFromSeed(genesisSeedPhrase, 0)
+		// Load or generate wallets
+		wallets, err := loadSystemWallets(dataDir)
 		if err != nil {
-			return nil, fmt.Errorf("failed to derive admin key: %w", err)
-		}
-		treasuryKey, err := derivePrivKeyFromSeed(genesisSeedPhrase, 1)
-		if err != nil {
-			return nil, fmt.Errorf("failed to derive treasury key: %w", err)
+			return nil, fmt.Errorf("wallet load error: %w", err)
 		}
 
-		adminAddr := gethcrypto.PubkeyToAddress(adminKey.PublicKey)
-		treasuryAddr := gethcrypto.PubkeyToAddress(treasuryKey.PublicKey)
+		admin := wallets.Admin.Address
+		treasury := wallets.Treasury.Address
 
-		fmt.Println("[GENESIS] Admin wallet address:   ", adminAddr.Hex())
-		fmt.Println("[GENESIS] Treasury wallet address:", treasuryAddr.Hex())
+		fmt.Println("[GENESIS] Admin wallet:", admin.Hex())
+		fmt.Println("[GENESIS] Treasury wallet:", treasury.Hex())
 
-		// 2) GORR alloc (native coin)
-		//    1 GORR = 1e18 (zoals ETH)
-		adminGORR := new(big.Int).Mul(big.NewInt(100000000000), big.NewInt(1e18))    // 100B GORR
-		treasuryGORR := new(big.Int).Mul(big.NewInt(100000000000), big.NewInt(1e18)) // 100B GORR
+		// ------------------------
+		// Supply (integer for now)
+		// ------------------------
+		totalGORR := new(big.Int).SetUint64(100_000_000_000)
+		totalUSDCc := new(big.Int).SetUint64(100_000_000_000)
 
-		if err := bc.State.SetBalance(adminAddr, adminGORR); err != nil {
-			return nil, fmt.Errorf("set admin balance: %w", err)
+		adminAlloc := new(big.Int).SetUint64(10_000_000)
+
+		treasuryGORR := new(big.Int).Sub(totalGORR, adminAlloc)
+		treasuryUSDCc := new(big.Int).Sub(totalUSDCc, adminAlloc)
+
+		// ------------------------
+		// Genesis Balances
+		// ------------------------
+		if err := bc.State.SetBalance(admin, adminAlloc); err != nil {
+			return nil, err
 		}
-		if err := bc.State.SetBalance(treasuryAddr, treasuryGORR); err != nil {
-			return nil, fmt.Errorf("set treasury balance: %w", err)
+		if err := bc.State.SetBalance(treasury, treasuryGORR); err != nil {
+			return nil, err
 		}
 
-		// (USDCc als native systeemtokem komt later via tokens-module)
+		if err := bc.State.SetUSDCcBalance(admin, adminAlloc); err != nil {
+			return nil, err
+		}
+		if err := bc.State.SetUSDCcBalance(treasury, treasuryUSDCc); err != nil {
+			return nil, err
+		}
 
-		// 3) Genesis block #0
+		// ------------------------
+		// Genesis Block
+		// ------------------------
 		genesis := &types.Block{
 			Header: &types.Header{
 				ParentHash: common.Hash{},
 				Number:     0,
 				Time:       uint64(time.Now().Unix()),
-				// StateRoot / TxRoot nog niet gevalideerd → voorlopig 0
-				StateRoot: common.Hash{},
-				TxRoot:    common.Hash{},
+				StateRoot:  common.Hash{},
+				TxRoot:     common.Hash{},
 			},
 			Transactions: []*types.Transaction{},
 		}
 
 		bc.head = genesis
 
-		if err := bc.saveBlock(genesis); err != nil {
-			return nil, err
-		}
-		if err := bc.saveHead(); err != nil {
-			return nil, err
-		}
+		_ = bc.saveBlock(genesis)
+		_ = bc.saveHead()
 
-		fmt.Println("[GENESIS] Genesis block #0 created and saved.")
-
-		// 4) wallets.json wegschrijven (zodat jij de keys hebt)
-		rootDir := filepath.Dir(bc.dataDir) // bv. data/
-		walletFile := filepath.Join(rootDir, "wallets.json")
-
-		if _, err := os.Stat(walletFile); os.IsNotExist(err) {
-			j := genesisWallets{
-				Admin: walletJSON{
-					Address:    adminAddr.Hex(),
-					PrivateKey: privKeyToHex(adminKey),
-				},
-				Treasury: walletJSON{
-					Address:    treasuryAddr.Hex(),
-					PrivateKey: privKeyToHex(treasuryKey),
-				},
-			}
-
-			data, err := json.MarshalIndent(j, "", "  ")
-			if err == nil {
-				_ = os.WriteFile(walletFile, data, 0o600)
-				fmt.Println("[GENESIS] Wrote system wallets to", walletFile)
-			}
-		}
+		fmt.Println("[GENESIS] Genesis block #0 created.")
 	} else {
-		// Bestaande chain
 		bc.head = head
 	}
 
 	return bc, nil
 }
 
+//
 // --------------------------------------------------------
 // Network ID
 // --------------------------------------------------------
@@ -207,8 +222,9 @@ func (bc *Blockchain) NetworkID() uint64 {
 	return bc.networkID
 }
 
+//
 // --------------------------------------------------------
-// Head helpers
+// Head Methods
 // --------------------------------------------------------
 
 func (bc *Blockchain) Head() *types.Block {
@@ -217,7 +233,6 @@ func (bc *Blockchain) Head() *types.Block {
 
 func (bc *Blockchain) SetHead(block *types.Block) error {
 	bc.head = block
-
 	if err := bc.saveBlock(block); err != nil {
 		return err
 	}
@@ -226,18 +241,15 @@ func (bc *Blockchain) SetHead(block *types.Block) error {
 
 func (bc *Blockchain) saveHead() error {
 	path := filepath.Join(bc.dataDir, "head.json")
-
 	data, err := json.MarshalIndent(bc.head, "", "  ")
 	if err != nil {
 		return err
 	}
-
 	return os.WriteFile(path, data, 0o644)
 }
 
 func (bc *Blockchain) loadHead() (*types.Block, error) {
 	path := filepath.Join(bc.dataDir, "head.json")
-
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -251,28 +263,22 @@ func (bc *Blockchain) loadHead() (*types.Block, error) {
 	if err := json.Unmarshal(data, &b); err != nil {
 		return nil, err
 	}
-
 	return &b, nil
 }
 
+//
 // --------------------------------------------------------
-// Block storage
+// Block Storage
 // --------------------------------------------------------
 
 func (bc *Blockchain) saveBlock(block *types.Block) error {
 	path := filepath.Join(bc.dataDir, fmt.Sprintf("block_%d.json", block.Header.Number))
-
-	data, err := json.MarshalIndent(block, "", "  ")
-	if err != nil {
-		return err
-	}
-
+	data, _ := json.MarshalIndent(block, "", "  ")
 	return os.WriteFile(path, data, 0o644)
 }
 
-func (bc *Blockchain) LoadBlock(number uint64) (*types.Block, error) {
-	path := filepath.Join(bc.dataDir, fmt.Sprintf("block_%d.json", number))
-
+func (bc *Blockchain) LoadBlock(num uint64) (*types.Block, error) {
+	path := filepath.Join(bc.dataDir, fmt.Sprintf("block_%d.json", num))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -282,28 +288,24 @@ func (bc *Blockchain) LoadBlock(number uint64) (*types.Block, error) {
 	if err := json.Unmarshal(data, &b); err != nil {
 		return nil, err
 	}
-
 	return &b, nil
 }
 
+//
 // --------------------------------------------------------
-// Receipts storage
+// Receipts + Tx Index
 // --------------------------------------------------------
+
+type txIndex map[string]uint64
 
 func (bc *Blockchain) SaveReceipts(blockNum uint64, receipts []*types.Receipt) error {
 	path := filepath.Join(bc.dataDir, fmt.Sprintf("receipts_%d.json", blockNum))
-
-	data, err := json.MarshalIndent(receipts, "", "  ")
-	if err != nil {
-		return err
-	}
-
+	data, _ := json.MarshalIndent(receipts, "", "  ")
 	return os.WriteFile(path, data, 0o644)
 }
 
 func (bc *Blockchain) LoadReceipts(blockNum uint64) ([]*types.Receipt, error) {
 	path := filepath.Join(bc.dataDir, fmt.Sprintf("receipts_%d.json", blockNum))
-
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -313,19 +315,11 @@ func (bc *Blockchain) LoadReceipts(blockNum uint64) ([]*types.Receipt, error) {
 	if err := json.Unmarshal(data, &receipts); err != nil {
 		return nil, err
 	}
-
 	return receipts, nil
 }
 
-// --------------------------------------------------------
-// Tx index: txHash -> blockNumber
-// --------------------------------------------------------
-
-type txIndex map[string]uint64
-
 func (bc *Blockchain) loadTxIndex() (txIndex, error) {
 	path := filepath.Join(bc.dataDir, "txindex.json")
-
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return txIndex{}, nil
 	}
@@ -336,21 +330,13 @@ func (bc *Blockchain) loadTxIndex() (txIndex, error) {
 	}
 
 	idx := txIndex{}
-	if err := json.Unmarshal(data, &idx); err != nil {
-		return nil, err
-	}
-
+	json.Unmarshal(data, &idx)
 	return idx, nil
 }
 
 func (bc *Blockchain) saveTxIndex(idx txIndex) error {
 	path := filepath.Join(bc.dataDir, "txindex.json")
-
-	data, err := json.MarshalIndent(idx, "", "  ")
-	if err != nil {
-		return err
-	}
-
+	data, _ := json.MarshalIndent(idx, "", "  ")
 	return os.WriteFile(path, data, 0o644)
 }
 
@@ -359,7 +345,6 @@ func (bc *Blockchain) SaveTxIndex(txHash common.Hash, blockNum uint64) error {
 	if err != nil {
 		return err
 	}
-
 	idx[txHash.Hex()] = blockNum
 	return bc.saveTxIndex(idx)
 }
@@ -369,11 +354,9 @@ func (bc *Blockchain) FindTxBlock(txHash common.Hash) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-
-	blockNum, ok := idx[txHash.Hex()]
+	num, ok := idx[txHash.Hex()]
 	if !ok {
 		return 0, fmt.Errorf("tx not indexed")
 	}
-
-	return blockNum, nil
+	return num, nil
 }
