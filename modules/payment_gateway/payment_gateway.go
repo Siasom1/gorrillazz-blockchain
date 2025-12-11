@@ -4,53 +4,99 @@ import (
 	"errors"
 	"math/big"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 )
 
+// ---------------------------------------------
+// Payment Status Types
+// ---------------------------------------------
+
+type PaymentStatus string
+
 const (
-	// Hoe lang een invoice geldig is (in seconden).
-	// Nu: 1 uur. Later kun je dit eventueel configurabel maken.
-	DefaultPaymentExpirySeconds = 3600
+	StatusPending  PaymentStatus = "pending"
+	StatusPaid     PaymentStatus = "paid"
+	StatusExpired  PaymentStatus = "expired"
+	StatusRefunded PaymentStatus = "refunded"
+	StatusSettled  PaymentStatus = "settled"
 )
 
-// PaymentIntent is een simpele in-memory representatie van een payment "invoice".
-type PaymentIntent struct {
-	ID        uint64         `json:"id"`
-	Merchant  common.Address `json:"merchant"`
-	Payer     common.Address `json:"payer"`
-	Amount    *big.Int       `json:"amount"`
-	Token     string         `json:"token"` // "GORR", "USDCc", etc.
-	Timestamp uint64         `json:"timestamp"`
-	ExpiresAt uint64         `json:"expiresAt"`
-	Paid      bool           `json:"paid"`
-	Refunded  bool           `json:"refunded"`
+// ---------------------------------------------
+// PaymentIntent struct
+// ---------------------------------------------
 
-	// Extra info voor debug & tracking
-	TxHash         common.Hash `json:"txHash"`
-	ConfirmedBlock uint64      `json:"confirmedBlock"`
+type PaymentIntent struct {
+	ID        uint64         `json:"ID"`
+	Merchant  common.Address `json:"Merchant"`
+	Payer     common.Address `json:"Payer"`
+	Amount    *big.Int       `json:"Amount"`    // Brutobedrag dat de klant moet betalen (in wei)
+	Token     string         `json:"Token"`     // "GORR" of "USDCc"
+	Timestamp uint64         `json:"Timestamp"` // Aanmaak-tijd (unix seconds)
+	Expiry    uint64         `json:"Expiry"`    // Verlooptijd (unix seconds)
+
+	Paid     bool          `json:"Paid"`
+	Refunded bool          `json:"Refunded"`
+	Status   PaymentStatus `json:"Status"`
+
+	// On-chain settlement metadata
+	TxHash      string `json:"TxHash"`      // 0x-hash string
+	BlockNumber uint64 `json:"BlockNumber"` // Block waar de betaling in zat
+	PaidAt      uint64 `json:"PaidAt"`      // Block timestamp (unix) van betaling
+
+	// Optioneel: later kun je hier fields toevoegen zoals:
+	// MerchantNetAmount, TreasuryFeeAmount, Currency, Metadata, etc.
 }
+
+// ---------------------------------------------
+// PaymentGateway struct
+// ---------------------------------------------
 
 type PaymentGateway struct {
-	mu      sync.RWMutex
-	intents map[uint64]*PaymentIntent
-	counter uint64
+	mu            sync.RWMutex
+	intents       map[uint64]*PaymentIntent
+	counter       uint64
+	expirySeconds uint64 // standaard geldigheidsduur van een intent
 }
 
+// NewPaymentGateway maakt een nieuwe gateway.
+// Standaard expiry: 15 minuten (900 seconden).
 func NewPaymentGateway() *PaymentGateway {
 	return &PaymentGateway{
-		intents: make(map[uint64]*PaymentIntent),
-		counter: 0,
+		intents:       make(map[uint64]*PaymentIntent),
+		counter:       0,
+		expirySeconds: 900, // 15 min
 	}
 }
 
-// CreateIntent maakt een nieuwe payment intent / invoice aan.
-func (pg *PaymentGateway) CreateIntent(merchant common.Address, amount *big.Int, token string, ts uint64) (*PaymentIntent, uint64, error) {
+// Optioneel: runtime configuratie van expiry.
+func (pg *PaymentGateway) SetExpirySeconds(seconds uint64) {
+	pg.mu.Lock()
+	defer pg.mu.Unlock()
+	pg.expirySeconds = seconds
+}
+
+// ---------------------------------------------
+// Intent Lifecycle
+// ---------------------------------------------
+
+// CreateIntent maakt een nieuwe payment intent.
+// merchant: merchant address
+// amount:   brutobedrag dat klant moet betalen (wei)
+// token:    "GORR" of "USDCc"
+// ts:       unix timestamp (bijv. time.Now().Unix() of blockTime)
+func (pg *PaymentGateway) CreateIntent(
+	merchant common.Address,
+	amount *big.Int,
+	token string,
+	ts uint64,
+) (*PaymentIntent, uint64, error) {
 	if amount == nil || amount.Sign() <= 0 {
-		return nil, 0, errors.New("amount must be > 0")
+		return nil, 0, errors.New("amount must be positive")
 	}
 	if token == "" {
-		return nil, 0, errors.New("missing token symbol")
+		return nil, 0, errors.New("token is required")
 	}
 
 	pg.mu.Lock()
@@ -62,21 +108,63 @@ func (pg *PaymentGateway) CreateIntent(merchant common.Address, amount *big.Int,
 	intent := &PaymentIntent{
 		ID:        id,
 		Merchant:  merchant,
+		Payer:     common.Address{},
 		Amount:    new(big.Int).Set(amount),
 		Token:     token,
 		Timestamp: ts,
-		ExpiresAt: ts + DefaultPaymentExpirySeconds,
+		Expiry:    ts + pg.expirySeconds,
 		Paid:      false,
 		Refunded:  false,
+		Status:    StatusPending,
+		TxHash:    "",
 	}
 
 	pg.intents[id] = intent
 	return intent, id, nil
 }
 
-// PayIntent (oude API) markeert een intent handmatig als betaald.
-// Blijft bestaan voor admin / debugging, maar in jouw flow gebruiken
-// we MarkPaidFromTx vanuit de BlockProducer.
+// GetIntent haalt een intent op én update automatisch de status
+// naar "expired" als de intent verlopen is en nog niet betaald.
+func (pg *PaymentGateway) GetIntent(id uint64) (*PaymentIntent, error) {
+	pg.mu.Lock()
+	defer pg.mu.Unlock()
+
+	intent, ok := pg.intents[id]
+	if !ok {
+		return nil, errors.New("payment intent not found")
+	}
+
+	now := uint64(time.Now().Unix())
+	pg.updateStatusLocked(intent, now)
+
+	return cloneIntent(intent), nil
+}
+
+// ListMerchantPayments geeft alle intents voor een merchant.
+// Status wordt per intent bijgewerkt (expiry).
+func (pg *PaymentGateway) ListMerchantPayments(merchant common.Address) []*PaymentIntent {
+	pg.mu.Lock()
+	defer pg.mu.Unlock()
+
+	now := uint64(time.Now().Unix())
+	list := []*PaymentIntent{}
+
+	for _, i := range pg.intents {
+		if i.Merchant == merchant {
+			pg.updateStatusLocked(i, now)
+			list = append(list, cloneIntent(i))
+		}
+	}
+	return list
+}
+
+// ---------------------------------------------
+// "Soft" Pay / Refund API (RPC helpers)
+// ---------------------------------------------
+
+// PayIntent is een "zachte" betaalactie, zonder on-chain saldo checks.
+// Handig voor tests / admin tooling, maar de ECHTE betaling
+// hoort via MarkPaidFromTx + block producer te lopen.
 func (pg *PaymentGateway) PayIntent(id uint64, payer common.Address) (*PaymentIntent, error) {
 	pg.mu.Lock()
 	defer pg.mu.Unlock()
@@ -85,27 +173,83 @@ func (pg *PaymentGateway) PayIntent(id uint64, payer common.Address) (*PaymentIn
 	if !ok {
 		return nil, errors.New("payment intent not found")
 	}
-	if intent.Refunded {
-		return nil, errors.New("payment intent already refunded")
+
+	now := uint64(time.Now().Unix())
+	pg.updateStatusLocked(intent, now)
+
+	if intent.Status == StatusExpired {
+		return nil, errors.New("cannot pay expired intent")
 	}
-	if intent.Paid {
-		return intent, nil
+	if intent.Status == StatusPaid || intent.Status == StatusRefunded || intent.Status == StatusSettled {
+		return cloneIntent(intent), nil
 	}
 
 	intent.Paid = true
+	intent.Status = StatusPaid
 	intent.Payer = payer
-	return intent, nil
+	intent.PaidAt = now
+
+	return cloneIntent(intent), nil
 }
 
-// MarkPaidFromTx wordt aangeroepen door de BlockProducer zodra
-// een payment tx in een blok is opgenomen.
+// RefundIntent markeert een intent als refunded.
+// In de echte wereld zou hier ook saldo-verplaatsing bijkomen;
+// hier markeren we alleen de intent state.
+func (pg *PaymentGateway) RefundIntent(id uint64) (*PaymentIntent, error) {
+	pg.mu.Lock()
+	defer pg.mu.Unlock()
+
+	intent, ok := pg.intents[id]
+	if !ok {
+		return nil, errors.New("payment intent not found")
+	}
+
+	now := uint64(time.Now().Unix())
+	pg.updateStatusLocked(intent, now)
+
+	if intent.Status != StatusPaid {
+		return nil, errors.New("only paid intents can be refunded")
+	}
+
+	intent.Refunded = true
+	intent.Status = StatusRefunded
+
+	return cloneIntent(intent), nil
+}
+
+// Settlen (bijv. na uitbetaling naar bankrekening).
+// Kan je later vanuit backend aanroepen.
+func (pg *PaymentGateway) SettleIntent(id uint64) (*PaymentIntent, error) {
+	pg.mu.Lock()
+	defer pg.mu.Unlock()
+
+	intent, ok := pg.intents[id]
+	if !ok {
+		return nil, errors.New("payment intent not found")
+	}
+
+	if intent.Status != StatusPaid && intent.Status != StatusRefunded {
+		return nil, errors.New("only paid or refunded intents can be settled")
+	}
+
+	intent.Status = StatusSettled
+	return cloneIntent(intent), nil
+}
+
+// ---------------------------------------------
+// On-chain settle: vanuit Block Producer
+// ---------------------------------------------
+
+// MarkPaidFromTx wordt in de BlockProducer aangeroepen zodra
+// een payment-tx succesvol in een block komt.
 //
-// Hier gebeurt:
-//   - check: bestaat intent?
-//   - check: niet refunded / niet al betaald
-//   - check: niet expired
-//   - check: merchant & amount matchen
-//   - intent.Paid = true, Payer, TxHash, ConfirmedBlock invullen
+// Hier doen we:
+// - intent opzoeken
+// - expiry check
+// - merchant match
+// - amount ≥ intent.Amount check
+// - status = paid
+// - on-chain metadata invullen (TxHash, BlockNumber, PaidAt)
 func (pg *PaymentGateway) MarkPaidFromTx(
 	id uint64,
 	payer common.Address,
@@ -116,7 +260,7 @@ func (pg *PaymentGateway) MarkPaidFromTx(
 	blockTime uint64,
 ) error {
 	if amount == nil || amount.Sign() <= 0 {
-		return errors.New("invalid amount")
+		return errors.New("amount must be positive")
 	}
 
 	pg.mu.Lock()
@@ -127,84 +271,61 @@ func (pg *PaymentGateway) MarkPaidFromTx(
 		return errors.New("payment intent not found")
 	}
 
-	if intent.Refunded {
-		return errors.New("payment intent already refunded")
+	// Status updaten obv blockTime (chain time)
+	pg.updateStatusLocked(intent, blockTime)
+
+	if intent.Status == StatusExpired {
+		return errors.New("intent is expired")
 	}
-	if intent.Paid {
-		// al betaald, niets meer te doen
-		return nil
+	if intent.Status == StatusPaid || intent.Status == StatusRefunded || intent.Status == StatusSettled {
+		return errors.New("intent already processed")
 	}
 
-	// Expiry check
-	if blockTime > intent.ExpiresAt {
-		return errors.New("payment intent expired")
+	if merchant != intent.Merchant {
+		return errors.New("merchant mismatch for intent")
 	}
 
-	// Merchant moet kloppen
-	if intent.Merchant != merchant {
-		return errors.New("merchant mismatch for payment intent")
-	}
-
-	// Amount: on-chain bedrag moet minimaal de intent dekken.
+	// We eisen dat de on-chain betaalde waarde >= intent.Amount is
 	if amount.Cmp(intent.Amount) < 0 {
-		return errors.New("on-chain amount is smaller than intent amount")
+		return errors.New("amount less than invoice value")
 	}
 
-	// Token-check: nu alleen "GORR", later uitbreiden naar USDCc etc.
-	if intent.Token != "GORR" {
-		// Je kunt dit strenger maken door een error te geven:
-		// return errors.New("unsupported token for MarkPaidFromTx")
-		// Voor nu laten we het toe als GORR-only chain.
-	}
-
+	// Markeer als betaald
 	intent.Paid = true
+	intent.Status = StatusPaid
 	intent.Payer = payer
-	intent.TxHash = txHash
-	intent.ConfirmedBlock = blockNum
+	intent.PaidAt = blockTime
+	intent.TxHash = txHash.Hex()
+	intent.BlockNumber = blockNum
 
 	return nil
 }
 
-// RefundIntent markeert een intent als refunded (logisch / administratief).
-func (pg *PaymentGateway) RefundIntent(id uint64) (*PaymentIntent, error) {
-	pg.mu.Lock()
-	defer pg.mu.Unlock()
+// ---------------------------------------------
+// Helpers
+// ---------------------------------------------
 
-	intent, ok := pg.intents[id]
-	if !ok {
-		return nil, errors.New("payment intent not found")
+// updateStatusLocked werkt onder pg.mu.Lock() / pg.mu.RLock().
+// Als intent verlopen is en nog niet betaald -> StatusExpired.
+func (pg *PaymentGateway) updateStatusLocked(intent *PaymentIntent, now uint64) {
+	if intent.Status == StatusPending &&
+		!intent.Paid &&
+		!intent.Refunded &&
+		intent.Expiry > 0 &&
+		now > intent.Expiry {
+		intent.Status = StatusExpired
 	}
-	if !intent.Paid {
-		return nil, errors.New("cannot refund — not yet paid")
-	}
-	if intent.Refunded {
-		return intent, nil
-	}
-
-	intent.Refunded = true
-	return intent, nil
 }
 
-func (pg *PaymentGateway) GetIntent(id uint64) (*PaymentIntent, error) {
-	pg.mu.RLock()
-	defer pg.mu.RUnlock()
-
-	intent, ok := pg.intents[id]
-	if !ok {
-		return nil, errors.New("not found")
+// cloneIntent maakt een kopie zodat de aanroeper de interne struct
+// niet per ongeluk kan muteren.
+func cloneIntent(i *PaymentIntent) *PaymentIntent {
+	if i == nil {
+		return nil
 	}
-	return intent, nil
-}
-
-func (pg *PaymentGateway) ListMerchantPayments(merchant common.Address) []*PaymentIntent {
-	pg.mu.RLock()
-	defer pg.mu.RUnlock()
-
-	list := []*PaymentIntent{}
-	for _, i := range pg.intents {
-		if i.Merchant == merchant {
-			list = append(list, i)
-		}
+	clone := *i
+	if i.Amount != nil {
+		clone.Amount = new(big.Int).Set(i.Amount)
 	}
-	return list
+	return &clone
 }
