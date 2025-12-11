@@ -15,6 +15,7 @@ import (
 	"github.com/Siasom1/gorrillazz-chain/core/types"
 	"github.com/Siasom1/gorrillazz-chain/state"
 
+	payment_gateway "github.com/Siasom1/gorrillazz-chain/modules/payment_gateway"
 	"github.com/ethereum/go-ethereum/common"
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
@@ -28,7 +29,7 @@ const genesisSeedPhrase = "GORRILLAZZ DEV SEED PHRASE - CHANGE ME IN PRODUCTION"
 
 type Wallet struct {
 	Address    common.Address `json:"address"`
-	PrivateKey string         `json:"privateKey"` // hex
+	PrivateKey string         `json:"privateKey"`
 }
 
 type WalletsFile struct {
@@ -103,12 +104,14 @@ func loadSystemWallets(datadir string) (WalletsFile, error) {
 // --------------------------------------------------------
 
 type Blockchain struct {
-	dataDir   string
-	networkID uint64
-
-	head   *types.Block
-	State  *state.State
-	TxPool *txpool.TxPool
+	dataDir      string
+	networkID    uint64
+	head         *types.Block
+	State        *state.State
+	TxPool       *txpool.TxPool
+	Payment      *payment_gateway.PaymentGateway
+	AdminAddr    common.Address
+	TreasuryAddr common.Address
 }
 
 //
@@ -120,6 +123,7 @@ func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 	bc := &Blockchain{
 		dataDir:   filepath.Join(dataDir, "chaindata"),
 		networkID: networkID,
+		Payment:   payment_gateway.NewPaymentGateway(),
 	}
 
 	os.MkdirAll(bc.dataDir, 0o755)
@@ -155,11 +159,15 @@ func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 		admin := wallets.Admin.Address
 		treasury := wallets.Treasury.Address
 
+		// Sla admin & treasury ook op in de chain struct
+		bc.AdminAddr = admin
+		bc.TreasuryAddr = treasury
+
 		fmt.Println("[GENESIS] Admin wallet:", admin.Hex())
 		fmt.Println("[GENESIS] Treasury wallet:", treasury.Hex())
 
 		// ------------------------
-		// Supply (integer for now)
+		// Supply (integer voor nu)
 		// ------------------------
 		totalGORR := new(big.Int).SetUint64(100_000_000_000)
 		totalUSDCc := new(big.Int).SetUint64(100_000_000_000)
@@ -207,7 +215,14 @@ func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 
 		fmt.Println("[GENESIS] Genesis block #0 created.")
 	} else {
+		// Chain bestond al: head laden + wallets lezen zodat Admin/Treasury bekend zijn
 		bc.head = head
+
+		wallets, err := loadSystemWallets(dataDir)
+		if err == nil {
+			bc.AdminAddr = wallets.Admin.Address
+			bc.TreasuryAddr = wallets.Treasury.Address
+		}
 	}
 
 	return bc, nil
@@ -215,21 +230,11 @@ func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 
 //
 // --------------------------------------------------------
-// Network ID
+// Misc functions
 // --------------------------------------------------------
 
-func (bc *Blockchain) NetworkID() uint64 {
-	return bc.networkID
-}
-
-//
-// --------------------------------------------------------
-// Head Methods
-// --------------------------------------------------------
-
-func (bc *Blockchain) Head() *types.Block {
-	return bc.head
-}
+func (bc *Blockchain) NetworkID() uint64  { return bc.networkID }
+func (bc *Blockchain) Head() *types.Block { return bc.head }
 
 func (bc *Blockchain) SetHead(block *types.Block) error {
 	bc.head = block
@@ -330,7 +335,7 @@ func (bc *Blockchain) loadTxIndex() (txIndex, error) {
 	}
 
 	idx := txIndex{}
-	json.Unmarshal(data, &idx)
+	_ = json.Unmarshal(data, &idx)
 	return idx, nil
 }
 

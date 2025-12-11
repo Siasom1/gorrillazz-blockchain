@@ -10,32 +10,10 @@ import (
 	"github.com/Siasom1/gorrillazz-chain/core/blockchain"
 )
 
-// RPCHandler is a function that handles a single RPC method.
 type RPCHandler func(params []interface{}) (interface{}, error)
 
 type RPCServer struct {
 	handlers map[string]RPCHandler
-}
-
-// StartRPCServer starts the JSON-RPC server on a given port.
-func StartRPCServer(port int, chain *blockchain.Blockchain) {
-	handlers := NewHandlers(chain)
-
-	log.Println("--------- RPC HANDLERS REGISTERED ---------")
-	for name := range handlers {
-		log.Println("RPC method available:", name)
-	}
-	log.Println("-------------------------------------------")
-
-	s := &RPCServer{
-		handlers: handlers,
-	}
-
-	http.HandleFunc("/", s.handle)
-
-	addr := fmt.Sprintf(":%d", port)
-	log.Printf("[RPC] Started JSON-RPC server at %s\n", addr)
-	go http.ListenAndServe(addr, nil)
 }
 
 type rpcRequest struct {
@@ -52,42 +30,82 @@ type rpcResponse struct {
 	ID      interface{} `json:"id"`
 }
 
+func StartRPCServer(port int, chain *blockchain.Blockchain) {
+	s := &RPCServer{
+		handlers: NewHandlers(chain),
+	}
+
+	http.HandleFunc("/", s.handle)
+
+	addr := fmt.Sprintf(":%d", port)
+	log.Println("[RPC] Started JSON-RPC server at", addr)
+
+	go http.ListenAndServe(addr, nil)
+}
+
 func (s *RPCServer) handle(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeRPCError(w, nil, "invalid body")
 		return
 	}
 
+	log.Println("[RPC] RAW REQUEST:", string(bodyBytes))
+
+	// Detect batch
+	if len(bodyBytes) > 0 && bodyBytes[0] == '[' {
+		var batch []rpcRequest
+		if err := json.Unmarshal(bodyBytes, &batch); err != nil {
+			writeRPCError(w, nil, "invalid batch JSON")
+			return
+		}
+
+		responses := make([]rpcResponse, 0, len(batch))
+		for _, req := range batch {
+			log.Println("[RPC] Incoming method:", req.Method)
+			responses = append(responses, s.call(req))
+		}
+
+		writeJSON(w, responses)
+		return
+	}
+
+	// single request
 	var req rpcRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		writeRPCError(w, nil, "invalid JSON")
 		return
 	}
 
-	// LOGGING: see what the client calls
 	log.Println("[RPC] Incoming method:", req.Method)
+	resp := s.call(req)
+	writeJSON(w, resp)
+}
 
+func (s *RPCServer) call(req rpcRequest) rpcResponse {
 	handler, ok := s.handlers[req.Method]
 	if !ok {
-		log.Println("[RPC] Unknown method:", req.Method)
-		writeRPCError(w, req.ID, "method not found")
-		return
+		return rpcResponse{
+			JSONRPC: "2.0",
+			Error:   "method not found",
+			ID:      req.ID,
+		}
 	}
 
 	result, err := handler(req.Params)
 	if err != nil {
-		writeRPCError(w, req.ID, err.Error())
-		return
+		return rpcResponse{
+			JSONRPC: "2.0",
+			Error:   err.Error(),
+			ID:      req.ID,
+		}
 	}
 
-	resp := rpcResponse{
+	return rpcResponse{
 		JSONRPC: "2.0",
 		Result:  result,
 		ID:      req.ID,
 	}
-
-	writeJSON(w, resp)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
@@ -96,10 +114,9 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 }
 
 func writeRPCError(w http.ResponseWriter, id interface{}, msg string) {
-	resp := rpcResponse{
+	writeJSON(w, rpcResponse{
 		JSONRPC: "2.0",
 		Error:   msg,
 		ID:      id,
-	}
-	writeJSON(w, resp)
+	})
 }

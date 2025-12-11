@@ -1,0 +1,26 @@
+{
+  "name": "gorrillazz-chain",
+  "version": "1.0.0",
+  "description": "",
+  "main": "send-gorr.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Siasom1/gorrillazz-blockchain.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Siasom1/gorrillazz-blockchain/issues"
+  },
+  "homepage": "https://github.com/Siasom1/gorrillazz-blockchain#readme",
+  "dependencies": {
+    "ethers": "^6.16.0"
+  }
+}

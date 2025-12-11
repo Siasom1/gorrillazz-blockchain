@@ -9,51 +9,51 @@ import (
 
 type rlpTx struct {
 	Nonce    uint64
-	To       *common.Address
-	Value    *big.Int
-	Asset    string
-	Amount   *big.Int
-	Gas      uint64
 	GasPrice *big.Int
+	Gas      uint64
+	To       *common.Address // NOTE: correct position
+	Value    *big.Int
+	Data     []byte
 	V        *big.Int
 	R        *big.Int
 	S        *big.Int
 }
 
+// Serialize encodes the tx in exact Ethereum RLP format
 func (tx *Transaction) Serialize() []byte {
 	obj := rlpTx{
 		Nonce:    tx.Nonce,
+		GasPrice: tx.GasPrice,
+		Gas:      tx.Gas,
 		To:       tx.To,
 		Value:    tx.Value,
-		Asset:    tx.Asset,
-		Amount:   tx.Amount,
-		Gas:      tx.Gas,
-		GasPrice: tx.GasPrice,
+		Data:     tx.Data,
 		V:        tx.V,
 		R:        tx.R,
 		S:        tx.S,
 	}
-	bytes, _ := rlp.EncodeToBytes(obj)
-	return bytes
+
+	out, _ := rlp.EncodeToBytes(obj)
+	return out
 }
 
+// DecodeTx decodes Ethereum-style RLP into our Transaction struct
 func DecodeTx(data []byte) (*Transaction, error) {
-	var rt rlpTx
-	err := rlp.DecodeBytes(data, &rt)
+	var decoded rlpTx
+	err := rlp.DecodeBytes(data, &decoded)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Transaction{
-		Nonce:    rt.Nonce,
-		To:       rt.To,
-		Value:    rt.Value,
-		Asset:    rt.Asset,
-		Amount:   rt.Amount,
-		Gas:      rt.Gas,
-		GasPrice: rt.GasPrice,
-		V:        rt.V,
-		R:        rt.R,
-		S:        rt.S,
+		Nonce:    decoded.Nonce,
+		GasPrice: decoded.GasPrice,
+		Gas:      decoded.Gas,
+		To:       decoded.To,
+		Value:    decoded.Value,
+		Data:     decoded.Data,
+		V:        decoded.V,
+		R:        decoded.R,
+		S:        decoded.S,
 	}, nil
 }
