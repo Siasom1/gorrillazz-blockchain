@@ -1,69 +1,33 @@
 package events
 
-import (
-	"sync"
+import "sync"
 
-	"github.com/Siasom1/gorrillazz-chain/core/types"
-)
+type Callback func(event interface{})
 
 type EventBus struct {
-	mu        sync.RWMutex
-	blockSubs []chan *types.Block
-	txSubs    []chan *types.Transaction
+	mu   sync.RWMutex
+	subs map[string][]Callback
 }
 
 func NewEventBus() *EventBus {
 	return &EventBus{
-		blockSubs: make([]chan *types.Block, 0),
-		txSubs:    make([]chan *types.Transaction, 0),
+		subs: make(map[string][]Callback),
 	}
 }
 
-// -------------------- Blocks --------------------
-
-func (b *EventBus) SubscribeBlocks() <-chan *types.Block {
-	ch := make(chan *types.Block, 16)
-
+func (b *EventBus) Subscribe(event string, cb Callback) {
 	b.mu.Lock()
-	b.blockSubs = append(b.blockSubs, ch)
-	b.mu.Unlock()
-
-	return ch
+	defer b.mu.Unlock()
+	b.subs[event] = append(b.subs[event], cb)
 }
 
-func (b *EventBus) PublishBlock(block *types.Block) {
+func (b *EventBus) Emit(event string, payload interface{}) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	for _, ch := range b.blockSubs {
-		// non-blocking send
-		select {
-		case ch <- block:
-		default:
-		}
-	}
-}
-
-// -------------------- Transactions --------------------
-
-func (b *EventBus) SubscribeTxs() <-chan *types.Transaction {
-	ch := make(chan *types.Transaction, 64)
-
-	b.mu.Lock()
-	b.txSubs = append(b.txSubs, ch)
-	b.mu.Unlock()
-
-	return ch
-}
-
-func (b *EventBus) PublishTx(tx *types.Transaction) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	for _, ch := range b.txSubs {
-		select {
-		case ch <- tx:
-		default:
+	if cbs, ok := b.subs[event]; ok {
+		for _, cb := range cbs {
+			go cb(payload)
 		}
 	}
 }

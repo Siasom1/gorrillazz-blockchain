@@ -120,7 +120,7 @@ func (pg *PaymentGateway) CreateIntent(
 	}
 
 	pg.intents[id] = intent
-	return intent, id, nil
+	return cloneIntent(intent), id, nil
 }
 
 // GetIntent haalt een intent op én update automatisch de status

@@ -104,12 +104,16 @@ func loadSystemWallets(datadir string) (WalletsFile, error) {
 // --------------------------------------------------------
 
 type Blockchain struct {
-	dataDir      string
-	networkID    uint64
-	head         *types.Block
-	State        *state.State
-	TxPool       *txpool.TxPool
-	Payment      *payment_gateway.PaymentGateway
+	dataDir   string
+	networkID uint64
+	head      *types.Block
+	State     *state.State
+	TxPool    *txpool.TxPool
+
+	// Payments / Gateway – zelfde instance
+	Payment *payment_gateway.PaymentGateway
+	Gateway *payment_gateway.PaymentGateway
+
 	AdminAddr    common.Address
 	TreasuryAddr common.Address
 }
@@ -120,37 +124,41 @@ type Blockchain struct {
 // --------------------------------------------------------
 
 func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
+	// Init lege struct
 	bc := &Blockchain{
 		dataDir:   filepath.Join(dataDir, "chaindata"),
 		networkID: networkID,
-		Payment:   payment_gateway.NewPaymentGateway(),
 	}
 
-	os.MkdirAll(bc.dataDir, 0o755)
+	// State laden
+	if err := os.MkdirAll(bc.dataDir, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create data dir: %v", err)
+	}
 
-	// Load state DB
 	st, err := state.NewState(filepath.Join(dataDir, "state"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to load state db: %v", err)
 	}
 	bc.State = st
 
-	// Load TxPool
+	// TxPool
 	bc.TxPool = txpool.NewTxPool()
 
-	// Load HEAD
+	// PaymentGateway instantiëren en op beide velden zetten
+	pg := payment_gateway.NewPaymentGateway()
+	bc.Payment = pg
+	bc.Gateway = pg
+
+	// Head proberen te laden
 	head, err := bc.loadHead()
 	if err != nil {
 		return nil, err
 	}
 
-	// --------------------------------------------------------
 	// GENESIS
-	// --------------------------------------------------------
 	if head == nil {
 		fmt.Println("[GENESIS] No existing blockchain, creating genesis block...")
 
-		// Load or generate wallets
 		wallets, err := loadSystemWallets(dataDir)
 		if err != nil {
 			return nil, fmt.Errorf("wallet load error: %w", err)
@@ -159,16 +167,12 @@ func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 		admin := wallets.Admin.Address
 		treasury := wallets.Treasury.Address
 
-		// Sla admin & treasury ook op in de chain struct
 		bc.AdminAddr = admin
 		bc.TreasuryAddr = treasury
 
 		fmt.Println("[GENESIS] Admin wallet:", admin.Hex())
 		fmt.Println("[GENESIS] Treasury wallet:", treasury.Hex())
 
-		// ------------------------
-		// Supply (integer voor nu)
-		// ------------------------
 		totalGORR := new(big.Int).SetUint64(100_000_000_000)
 		totalUSDCc := new(big.Int).SetUint64(100_000_000_000)
 
@@ -177,26 +181,12 @@ func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 		treasuryGORR := new(big.Int).Sub(totalGORR, adminAlloc)
 		treasuryUSDCc := new(big.Int).Sub(totalUSDCc, adminAlloc)
 
-		// ------------------------
-		// Genesis Balances
-		// ------------------------
-		if err := bc.State.SetBalance(admin, adminAlloc); err != nil {
-			return nil, err
-		}
-		if err := bc.State.SetBalance(treasury, treasuryGORR); err != nil {
-			return nil, err
-		}
+		bc.State.SetBalance(admin, adminAlloc)
+		bc.State.SetBalance(treasury, treasuryGORR)
 
-		if err := bc.State.SetUSDCcBalance(admin, adminAlloc); err != nil {
-			return nil, err
-		}
-		if err := bc.State.SetUSDCcBalance(treasury, treasuryUSDCc); err != nil {
-			return nil, err
-		}
+		bc.State.SetUSDCcBalance(admin, adminAlloc)
+		bc.State.SetUSDCcBalance(treasury, treasuryUSDCc)
 
-		// ------------------------
-		// Genesis Block
-		// ------------------------
 		genesis := &types.Block{
 			Header: &types.Header{
 				ParentHash: common.Hash{},
@@ -209,20 +199,25 @@ func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 		}
 
 		bc.head = genesis
-
-		_ = bc.saveBlock(genesis)
-		_ = bc.saveHead()
+		if err := bc.saveBlock(genesis); err != nil {
+			return nil, err
+		}
+		if err := bc.saveHead(); err != nil {
+			return nil, err
+		}
 
 		fmt.Println("[GENESIS] Genesis block #0 created.")
 	} else {
-		// Chain bestond al: head laden + wallets lezen zodat Admin/Treasury bekend zijn
-		bc.head = head
-
+		// Chain bestaat al → wallets opnieuw lezen zodat
+		// AdminAddr / TreasuryAddr gevuld zijn
 		wallets, err := loadSystemWallets(dataDir)
-		if err == nil {
-			bc.AdminAddr = wallets.Admin.Address
-			bc.TreasuryAddr = wallets.Treasury.Address
+		if err != nil {
+			return nil, fmt.Errorf("wallet load error on existing chain: %w", err)
 		}
+		bc.AdminAddr = wallets.Admin.Address
+		bc.TreasuryAddr = wallets.Treasury.Address
+
+		bc.head = head
 	}
 
 	return bc, nil

@@ -2,121 +2,213 @@ package rpc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"log"
+	"math/big"
 	"net/http"
 
 	"github.com/Siasom1/gorrillazz-chain/core/blockchain"
+	"github.com/Siasom1/gorrillazz-chain/events"
+	"github.com/ethereum/go-ethereum/common"
 )
 
-type RPCHandler func(params []interface{}) (interface{}, error)
-
-type RPCServer struct {
-	handlers map[string]RPCHandler
+type Server struct {
+	bc  *blockchain.Blockchain
+	bus *events.EventBus
 }
 
-type rpcRequest struct {
-	JSONRPC string        `json:"jsonrpc"`
-	Method  string        `json:"method"`
-	Params  []interface{} `json:"params"`
-	ID      interface{}   `json:"id"`
+func NewServer(bc *blockchain.Blockchain, bus *events.EventBus) *Server {
+	return &Server{bc: bc, bus: bus}
 }
 
-type rpcResponse struct {
-	JSONRPC string      `json:"jsonrpc"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   interface{} `json:"error,omitempty"`
-	ID      interface{} `json:"id"`
-}
+//
+// ------------------------------------------------------------
+// JSON RESPONSE HELPERS
+// ------------------------------------------------------------
+//
 
-func StartRPCServer(port int, chain *blockchain.Blockchain) {
-	s := &RPCServer{
-		handlers: NewHandlers(chain),
+func writeJSON(w http.ResponseWriter, result interface{}, err error) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"error":   err.Error(),
+			"id":      1,
+		})
+		return
 	}
 
-	http.HandleFunc("/", s.handle)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"result":  result,
+		"id":      1,
+	})
+}
+
+func writeError(w http.ResponseWriter, err error) {
+	writeJSON(w, nil, err)
+}
+
+//
+// ------------------------------------------------------------
+// JSON-RPC HANDLER
+// ------------------------------------------------------------
+//
+
+func (s *Server) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
+	var req map[string]interface{}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	method, _ := req["method"].(string)
+	params, _ := req["params"].([]interface{})
+
+	switch method {
+
+	//
+	// PAYMENT INTENTS
+	//
+	case "gorr_createPaymentIntent":
+		result, err := HandleCreatePaymentIntent(s.bc, params)
+		writeJSON(w, result, err)
+
+	case "gorr_getPaymentIntent":
+		result, err := HandleGetPaymentIntent(s.bc, params)
+		writeJSON(w, result, err)
+
+	case "gorr_listMerchantPayments":
+		result, err := HandleListMerchantPayments(s.bc, params)
+		writeJSON(w, result, err)
+
+	//
+	// NATIVE TOKEN TRANSFER
+	//
+	case "gorr_sendTransaction":
+		result, err := HandleSendNative(s.bc, params)
+		writeJSON(w, result, err)
+
+	default:
+		writeError(w, fmt.Errorf("unknown method: %s", method))
+	}
+}
+
+//
+// ------------------------------------------------------------
+// RPC SERVER STARTUP
+// ------------------------------------------------------------
+//
+
+func StartRPCServer(port int, server *Server) {
+	mux := http.NewServeMux()
+
+	// JSON-RPC
+	mux.HandleFunc("/", server.HandleJSONRPC)
+
+	// REST endpoint (admin dashboard)
+	mux.HandleFunc("/payments/merchant", server.handleGetMerchantPayments)
 
 	addr := fmt.Sprintf(":%d", port)
-	log.Println("[RPC] Started JSON-RPC server at", addr)
+	fmt.Println("[RPC] Listening on", addr)
 
-	go http.ListenAndServe(addr, nil)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		fmt.Println("[RPC] Server error:", err)
+	}
 }
 
-func (s *RPCServer) handle(w http.ResponseWriter, r *http.Request) {
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeRPCError(w, nil, "invalid body")
+//
+// ------------------------------------------------------------
+// REST ENDPOINT: LIST PAYMENTS FOR MERCHANT
+// ------------------------------------------------------------
+//
+
+func (s *Server) handleGetMerchantPayments(w http.ResponseWriter, r *http.Request) {
+	merchant := r.URL.Query().Get("merchant")
+
+	if merchant == "" {
+		http.Error(w, "missing merchant", http.StatusBadRequest)
 		return
 	}
 
-	log.Println("[RPC] RAW REQUEST:", string(bodyBytes))
+	payments := s.bc.State.PaymentGateway.ListMerchantPayments(
+		common.HexToAddress(merchant),
+	)
 
-	// Detect batch
-	if len(bodyBytes) > 0 && bodyBytes[0] == '[' {
-		var batch []rpcRequest
-		if err := json.Unmarshal(bodyBytes, &batch); err != nil {
-			writeRPCError(w, nil, "invalid batch JSON")
-			return
-		}
-
-		responses := make([]rpcResponse, 0, len(batch))
-		for _, req := range batch {
-			log.Println("[RPC] Incoming method:", req.Method)
-			responses = append(responses, s.call(req))
-		}
-
-		writeJSON(w, responses)
-		return
-	}
-
-	// single request
-	var req rpcRequest
-	if err := json.Unmarshal(bodyBytes, &req); err != nil {
-		writeRPCError(w, nil, "invalid JSON")
-		return
-	}
-
-	log.Println("[RPC] Incoming method:", req.Method)
-	resp := s.call(req)
-	writeJSON(w, resp)
-}
-
-func (s *RPCServer) call(req rpcRequest) rpcResponse {
-	handler, ok := s.handlers[req.Method]
-	if !ok {
-		return rpcResponse{
-			JSONRPC: "2.0",
-			Error:   "method not found",
-			ID:      req.ID,
-		}
-	}
-
-	result, err := handler(req.Params)
-	if err != nil {
-		return rpcResponse{
-			JSONRPC: "2.0",
-			Error:   err.Error(),
-			ID:      req.ID,
-		}
-	}
-
-	return rpcResponse{
-		JSONRPC: "2.0",
-		Result:  result,
-		ID:      req.ID,
-	}
-}
-
-func writeJSON(w http.ResponseWriter, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
-}
-
-func writeRPCError(w http.ResponseWriter, id interface{}, msg string) {
-	writeJSON(w, rpcResponse{
-		JSONRPC: "2.0",
-		Error:   msg,
-		ID:      id,
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"payments": payments,
 	})
+}
+
+//
+// ------------------------------------------------------------
+// RPC METHOD: SEND NATIVE TOKEN
+// ------------------------------------------------------------
+//
+
+func HandleSendNative(bc *blockchain.Blockchain, params []interface{}) (interface{}, error) {
+	if len(params) != 1 {
+		return nil, errors.New("invalid params")
+	}
+
+	raw, ok := params[0].(map[string]interface{})
+	if !ok {
+		return nil, errors.New("invalid param format")
+	}
+
+	fromStr := raw["from"].(string)
+	toStr := raw["to"].(string)
+	amountFloat := raw["amount"].(float64)
+
+	from := common.HexToAddress(fromStr)
+	to := common.HexToAddress(toStr)
+
+	// convert float → big.Int (ether → wei)
+	amountWei := new(big.Int)
+	amountWei.Mul(big.NewInt(int64(amountFloat*1e6)), big.NewInt(1e12))
+
+	txHash, err := bc.State.PaymentGateway.SendNative(from, to, amountWei)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"txHash": txHash.Hex(),
+	}, nil
+}
+
+//
+// ------------------------------------------------------------
+// PAYMENT INTENT HANDLERS
+// ------------------------------------------------------------
+//
+
+// creates payment intent
+func HandleCreatePaymentIntent(bc *blockchain.Blockchain, params []interface{}) (interface{}, error) {
+	raw := params[0].(map[string]interface{})
+	merchant := common.HexToAddress(raw["merchant"].(string))
+	amount := raw["amount"].(float64)
+	token := raw["token"].(string)
+
+	intent, err := bc.State.PaymentGateway.CreateIntent(merchant, amount, token)
+	if err != nil {
+		return nil, err
+	}
+	return intent, nil
+}
+
+// returns single intent
+func HandleGetPaymentIntent(bc *blockchain.Blockchain, params []interface{}) (interface{}, error) {
+	id := int(params[0].(float64))
+	intent, err := bc.State.PaymentGateway.GetIntent(id)
+	if err != nil {
+		return nil, err
+	}
+	return intent, nil
+}
+
+// returns all merchant payments
+func HandleListMerchantPayments(bc *blockchain.Blockchain, params []interface{}) (interface{}, error) {
+	merchant := common.HexToAddress(params[0].(string))
+	list := bc.State.PaymentGateway.ListMerchantPayments(merchant)
+	return list, nil
 }

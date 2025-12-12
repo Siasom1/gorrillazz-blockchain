@@ -15,10 +15,8 @@ import (
 )
 
 const (
-	paymentDataPrefix = "GORR_PAY:"
-
-	// Treasury cut (fee) for merchant payments:
-	// 250 bps = 2.5%
+	paymentDataPrefix = "GORR_PAY:" // tx.Data = "GORR_PAY:<intentID>"
+	// Fee in basispunten → 250 = 2.5%
 	treasuryFeeBps = 250
 	bpsDenominator = 10000
 )
@@ -60,9 +58,9 @@ func (bp *BlockProducer) Stop() {
 	close(bp.quit)
 }
 
-// ---------------------------------------------------------------
+// ----------------------------------------------------------------
 // BLOCK CREATION
-// ---------------------------------------------------------------
+// ----------------------------------------------------------------
 
 func (bp *BlockProducer) produce() {
 	head := bp.chain.Head()
@@ -85,7 +83,6 @@ func (bp *BlockProducer) produce() {
 	blockNum := newBlock.Header.Number
 	blockTime := newBlock.Header.Time
 
-	// Pending TXs
 	txns := bp.chain.TxPool.Pending()
 	receipts := []*types.Receipt{}
 
@@ -96,25 +93,30 @@ func (bp *BlockProducer) produce() {
 
 		from, err := tx.From()
 		if err != nil {
-			// fallback: gebruik Admin address
-			bp.logger.Info(fmt.Sprintf("Invalid signature, using Admin as fallback sender: %v", err))
+			// DEV fallback: gebruik admin als sender zodat je chain niet vastloopt
+			bp.logger.Info(fmt.Sprintf("Invalid TX signature (%v); using AdminAddr as fallback sender", err))
+			if bp.chain.AdminAddr == (common.Address{}) {
+				bp.logger.Error("AdminAddr is zero address; cannot fallback sender")
+				continue
+			}
 			from = bp.chain.AdminAddr
 		}
 
-		// Nonce check
+		// NONCE check
 		stateNonce, err := bp.chain.State.GetNonce(from)
 		if err != nil {
-			bp.logger.Error(fmt.Sprintf("GetNonce(%s) error: %v", from.Hex(), err))
+			bp.logger.Error(fmt.Sprintf("GetNonce error for %s: %v", from.Hex(), err))
 			continue
 		}
 		if tx.Nonce != stateNonce {
+			// Nonce mismatch → skip (later opnieuw proberen)
 			continue
 		}
 
-		// Detect payment intent
+		// Detecteer payment intent in tx.Data
 		intentID, isPayment := parsePaymentIntentID(tx.Data)
-
 		var ok bool
+
 		if isPayment {
 			ok = bp.processPaymentGORR(tx, from, intentID, blockNum, blockTime)
 		} else {
@@ -122,24 +124,25 @@ func (bp *BlockProducer) produce() {
 		}
 
 		if !ok {
+			// Onvoldoende saldo / intent ongeldig
 			continue
 		}
 
-		// Increase nonce
+		// Nonce verhogen pas ná succesvolle verwerking
 		if err := bp.chain.State.IncreaseNonce(from); err != nil {
 			bp.logger.Error(fmt.Sprintf("IncreaseNonce error: %v", err))
 			continue
 		}
 
-		// Add TX to block
+		// In block opnemen
 		newBlock.Transactions = append(newBlock.Transactions, tx)
 
-		// Index TX → block
+		// Tx indexeren voor eth_getTransactionReceipt / eth_getTransactionByHash
 		if err := bp.chain.SaveTxIndex(tx.Hash(), blockNum); err != nil {
 			bp.logger.Error(fmt.Sprintf("SaveTxIndex error: %v", err))
 		}
 
-		// Build receipt
+		// Receipt opslaan in geheugen (later opslaan naar disk)
 		receipt := &types.Receipt{
 			TxHash:           tx.Hash(),
 			BlockHash:        newBlock.Hash(),
@@ -152,74 +155,73 @@ func (bp *BlockProducer) produce() {
 		}
 		receipts = append(receipts, receipt)
 
-		// Remove from mempool
+		// Uit de txpool halen
 		bp.chain.TxPool.Remove(tx)
 	}
 
-	// Save receipts
-	if err := bp.chain.SaveReceipts(blockNum, receipts); err != nil {
-		bp.logger.Error(fmt.Sprintf("SaveReceipts error: %v", err))
-	}
-
-	// Update chain head
+	// HEAD updaten + block opslaan
 	if err := bp.chain.SetHead(newBlock); err != nil {
 		bp.logger.Error(fmt.Sprintf("SetHead error: %v", err))
 	}
 
+	// Receipts opslaan
+	if err := bp.chain.SaveReceipts(newBlock.Header.Number, receipts); err != nil {
+		bp.logger.Error(fmt.Sprintf("SaveReceipts error: %v", err))
+	}
+
 	bp.logger.Info(fmt.Sprintf(
 		"Produced block #%d | %d txs | Hash=%s",
-		blockNum,
+		newBlock.Header.Number,
 		len(newBlock.Transactions),
 		newBlock.Hash().Hex(),
 	))
 }
 
-// ---------------------------------------------------------------
-// STANDARD GORR TRANSFER (NO FEE)
-// ---------------------------------------------------------------
+// ----------------------------------------------------------------
+// Normale GORR transfer (zonder fee / payment intent)
+// ----------------------------------------------------------------
 
 func (bp *BlockProducer) processGORR(tx *types.Transaction, from common.Address) bool {
 	if tx.To == nil {
-		bp.logger.Info("TX rejected: missing To address")
+		bp.logger.Info("TX rejected: nil To address")
 		return false
 	}
 
 	fromBal, err := bp.chain.State.GetBalance(from)
 	if err != nil {
-		bp.logger.Error("GetBalance(from) error: " + err.Error())
+		bp.logger.Error(fmt.Sprintf("GetBalance(from) error: %v", err))
 		return false
 	}
 
 	if fromBal.Cmp(tx.Value) < 0 {
-		// insufficient balance
+		// Onvoldoende saldo
 		return false
 	}
 
 	toBal, err := bp.chain.State.GetBalance(*tx.To)
 	if err != nil {
-		bp.logger.Error("GetBalance(to) error: " + err.Error())
+		bp.logger.Error(fmt.Sprintf("GetBalance(to) error: %v", err))
 		return false
 	}
 
-	// apply transfer
 	newFrom := new(big.Int).Sub(fromBal, tx.Value)
 	newTo := new(big.Int).Add(toBal, tx.Value)
 
 	if err := bp.chain.State.SetBalance(from, newFrom); err != nil {
-		bp.logger.Error("SetBalance(from) error: " + err.Error())
+		bp.logger.Error(fmt.Sprintf("SetBalance(from) error: %v", err))
 		return false
 	}
 	if err := bp.chain.State.SetBalance(*tx.To, newTo); err != nil {
-		bp.logger.Error("SetBalance(to) error: " + err.Error())
+		bp.logger.Error(fmt.Sprintf("SetBalance(to) error: %v", err))
 		return false
 	}
 
 	return true
 }
 
-// ---------------------------------------------------------------
-// PAYMENT WITH TREASURY FEE
-// ---------------------------------------------------------------
+// ----------------------------------------------------------------
+// Payment GORR transfer (met treasury fee + PaymentGateway)
+// ----------------------------------------------------------------
 
 func (bp *BlockProducer) processPaymentGORR(
 	tx *types.Transaction,
@@ -228,74 +230,89 @@ func (bp *BlockProducer) processPaymentGORR(
 	blockNum uint64,
 	blockTime uint64,
 ) bool {
-
 	if tx.To == nil {
-		bp.logger.Info("Payment TX rejected: missing merchant address")
+		bp.logger.Info("Payment TX rejected: nil To address")
 		return false
 	}
 
 	if bp.chain.Payment == nil {
-		bp.logger.Info("PaymentGateway is nil")
+		bp.logger.Info("Payment TX rejected: PaymentGateway is nil")
 		return false
 	}
 
-	// Treasury must be known
 	if bp.chain.TreasuryAddr == (common.Address{}) {
-		bp.logger.Info("TreasuryAddr missing")
+		bp.logger.Info("Payment TX rejected: TreasuryAddr is zero address")
 		return false
 	}
 
-	// Check intent
+	// 1) Intent ophalen
 	intent, err := bp.chain.Payment.GetIntent(intentID)
 	if err != nil {
-		bp.logger.Info(fmt.Sprintf("Intent %d missing: %v", intentID, err))
+		bp.logger.Info(fmt.Sprintf("Payment intent %d not found: %v", intentID, err))
 		return false
 	}
 
-	// Check expiry
-	if intent.IsExpired(blockTime) {
-		bp.logger.Info(fmt.Sprintf("Intent %d expired", intentID))
-		return false
-	}
-
+	// Voor nu: alleen GORR-payments via native Value
 	if intent.Token != "GORR" {
-		bp.logger.Info(fmt.Sprintf("Intent %d rejected token %s", intentID, intent.Token))
+		bp.logger.Info(fmt.Sprintf("Payment intent %d has unsupported token %s (only GORR supported for now)", intentID, intent.Token))
 		return false
 	}
 
-	// Merchant must match tx.To
+	// Merchant moet overeenkomen met tx.To
 	if intent.Merchant != *tx.To {
-		bp.logger.Info("Merchant mismatch")
+		bp.logger.Info(fmt.Sprintf("Payment intent %d merchant mismatch", intentID))
 		return false
 	}
 
-	// Balances
-	fromBal, _ := bp.chain.State.GetBalance(from)
+	// 2) Balances & fee berekenen
+	fromBal, err := bp.chain.State.GetBalance(from)
+	if err != nil {
+		bp.logger.Error(fmt.Sprintf("GetBalance(from) error: %v", err))
+		return false
+	}
+
 	if fromBal.Cmp(tx.Value) < 0 {
-		bp.logger.Info("Insufficient balance")
+		bp.logger.Info("Payment TX rejected: insufficient balance")
 		return false
 	}
 
-	// Treasury fee
+	// Fee = value * treasuryFeeBps / 10000
 	fee := new(big.Int).Mul(tx.Value, big.NewInt(treasuryFeeBps))
 	fee.Div(fee, big.NewInt(bpsDenominator))
 
 	merchantAmount := new(big.Int).Sub(tx.Value, fee)
 
-	// Load balances
-	merchantBal, _ := bp.chain.State.GetBalance(*tx.To)
-	treasuryBal, _ := bp.chain.State.GetBalance(bp.chain.TreasuryAddr)
+	merchantBal, err := bp.chain.State.GetBalance(*tx.To)
+	if err != nil {
+		bp.logger.Error(fmt.Sprintf("GetBalance(merchant) error: %v", err))
+		return false
+	}
 
-	// Apply debits/credits
+	treasuryBal, err := bp.chain.State.GetBalance(bp.chain.TreasuryAddr)
+	if err != nil {
+		bp.logger.Error(fmt.Sprintf("GetBalance(treasury) error: %v", err))
+		return false
+	}
+
 	newFrom := new(big.Int).Sub(fromBal, tx.Value)
 	newMerchant := new(big.Int).Add(merchantBal, merchantAmount)
 	newTreasury := new(big.Int).Add(treasuryBal, fee)
 
-	bp.chain.State.SetBalance(from, newFrom)
-	bp.chain.State.SetBalance(*tx.To, newMerchant)
-	bp.chain.State.SetBalance(bp.chain.TreasuryAddr, newTreasury)
+	// 3) Balances wegschrijven
+	if err := bp.chain.State.SetBalance(from, newFrom); err != nil {
+		bp.logger.Error(fmt.Sprintf("SetBalance(from) error: %v", err))
+		return false
+	}
+	if err := bp.chain.State.SetBalance(*tx.To, newMerchant); err != nil {
+		bp.logger.Error(fmt.Sprintf("SetBalance(merchant) error: %v", err))
+		return false
+	}
+	if err := bp.chain.State.SetBalance(bp.chain.TreasuryAddr, newTreasury); err != nil {
+		bp.logger.Error(fmt.Sprintf("SetBalance(treasury) error: %v", err))
+		return false
+	}
 
-	// Mark intent paid
+	// 4) PaymentGateway updaten (on-chain settlement registratie)
 	if err := bp.chain.Payment.MarkPaidFromTx(
 		intentID,
 		from,
@@ -305,12 +322,15 @@ func (bp *BlockProducer) processPaymentGORR(
 		blockNum,
 		blockTime,
 	); err != nil {
-		bp.logger.Info(fmt.Sprintf("MarkPaidFromTx failed: %v", err))
+		// Funds zijn al verplaatst, intent niet gemarkeerd -> in echte productie:
+		// alert / compensating action. Voor nu loggen we.
+		bp.logger.Info(fmt.Sprintf("MarkPaidFromTx failed for intent %d: %v", intentID, err))
 	}
 
 	bp.logger.Info(fmt.Sprintf(
-		"Intent %d PAID | gross=%s fee=%s net=%s",
+		"Payment intent %d PAID via tx %s | gross=%s, fee=%s, net=%s",
 		intentID,
+		tx.Hash().Hex(),
 		tx.Value.String(),
 		fee.String(),
 		merchantAmount.String(),
@@ -319,21 +339,27 @@ func (bp *BlockProducer) processPaymentGORR(
 	return true
 }
 
-// ---------------------------------------------------------------
-// HELPERS
-// ---------------------------------------------------------------
+// ----------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------
 
+// parsePaymentIntentID verwacht tx.Data als ASCII "GORR_PAY:<id>"
+// en geeft (id, true) terug als het matcht.
+// Zo niet, dan (0, false).
 func parsePaymentIntentID(data []byte) (uint64, bool) {
 	if len(data) == 0 {
 		return 0, false
 	}
-
 	if !bytes.HasPrefix(data, []byte(paymentDataPrefix)) {
 		return 0, false
 	}
 
-	value := string(data[len(paymentDataPrefix):])
-	id, err := strconv.ParseUint(value, 10, 64)
+	idStr := string(data[len(paymentDataPrefix):])
+	if idStr == "" {
+		return 0, false
+	}
+
+	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {
 		return 0, false
 	}

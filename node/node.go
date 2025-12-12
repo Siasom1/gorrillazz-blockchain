@@ -10,63 +10,74 @@ import (
 	"github.com/Siasom1/gorrillazz-chain/rpc"
 )
 
+// Node is de “container” voor alles:
+// - blockchain
+// - event bus
+// - block producer
+// - RPC server
 type Node struct {
-	Config   *Config
-	Chain    *blockchain.Blockchain
-	Logger   *log.Logger
-	EventBus *events.EventBus
+	Config *Config
+
+	Chain  *blockchain.Blockchain
+	Logger *log.Logger
+	Bus    *events.EventBus
+
 	Producer *producer.BlockProducer
+	RPC      *rpc.Server
 
 	stopChan chan struct{}
 }
 
-// --------------------------------------------------------
-// NewNode
-// --------------------------------------------------------
+// NewNode bouwt alle componenten op
+func NewNode(cfg *Config) (*Node, error) {
+	logger := log.NewLogger(cfg.LogLevel)
 
-func NewNode(cfg *Config) *Node {
+	// Shared event bus
+	bus := events.NewEventBus()
+
+	// Blockchain
+	chain, err := blockchain.NewBlockchain(cfg.DataDir, cfg.NetworkID)
+	if err != nil {
+		return nil, fmt.Errorf("init blockchain: %w", err)
+	}
+
+	// Block producer
+	prod := producer.NewBlockProducer(
+		chain,
+		logger,
+		uint64(cfg.BlockTime),
+		bus,
+	)
+
+	// RPC server
+	rpcServer := rpc.NewServer(chain, bus)
+
 	return &Node{
 		Config:   cfg,
-		Logger:   log.NewLogger(cfg.LogLevel),
-		EventBus: events.NewEventBus(),
+		Chain:    chain,
+		Logger:   logger,
+		Bus:      bus,
+		Producer: prod,
+		RPC:      rpcServer,
 		stopChan: make(chan struct{}),
-	}
+	}, nil
 }
 
-// --------------------------------------------------------
-// Start
-// --------------------------------------------------------
-
+// Start start de RPC-server + block producer
 func (n *Node) Start() error {
 	n.Logger.Info("Starting Gorrillazz Node...")
 
-	// Load blockchain
-	chain, err := blockchain.NewBlockchain(n.Config.DataDir, n.Config.NetworkID)
-	if err != nil {
-		return fmt.Errorf("failed to init blockchain: %v", err)
-	}
-	n.Chain = chain
-
-	// Start RPC server
-	rpc.StartRPCServer(n.Config.RPCPort, n.Chain)
+	// Start RPC in een goroutine
+	go rpc.StartRPCServer(n.Config.RPCPort, n.RPC)
 
 	// Start block producer
-	n.Producer = producer.NewBlockProducer(
-		n.Chain,
-		n.Logger,
-		uint64(n.Config.BlockTime),
-		n.EventBus,
-	)
 	n.Producer.Start()
 
 	n.Logger.Info("Node started successfully.")
 	return nil
 }
 
-// --------------------------------------------------------
-// Stop
-// --------------------------------------------------------
-
+// Stop netjes stoppen
 func (n *Node) Stop() {
 	n.Logger.Info("Stopping node...")
 	close(n.stopChan)

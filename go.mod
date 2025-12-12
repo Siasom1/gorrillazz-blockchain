@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/ethereum/go-ethereum v1.16.7
+	github.com/gorilla/websocket v1.5.3
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
 	golang.org/x/crypto v0.36.0
 )
