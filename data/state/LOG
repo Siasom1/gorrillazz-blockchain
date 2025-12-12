@@ -23,3 +23,30 @@
 17:22:04.517892 version@stat F·[1] S·420B[420B] Sc·[0.25]
 17:22:04.584048 db@janitor F·3 G·0
 17:22:04.584305 db@open done T·68.012028ms
+=============== Dec 12, 2025 (CET) ===============
+23:41:34.443720 log@legend F·NumFile S·FileSize N·Entry C·BadEntry B·BadBlock Ke·KeyError D·DroppedEntry L·Level Q·SeqNum T·TimeElapsed
+23:41:34.463749 version@stat F·[1] S·420B[420B] Sc·[0.25]
+23:41:34.463914 db@open opening
+23:41:34.464219 journal@recovery F·1
+23:41:34.465170 journal@recovery recovering @5
+23:41:34.467035 version@stat F·[1] S·420B[420B] Sc·[0.25]
+23:41:34.516310 db@janitor F·3 G·0
+23:41:34.516760 db@open done T·52.789231ms
+=============== Dec 13, 2025 (CET) ===============
+00:10:24.811380 log@legend F·NumFile S·FileSize N·Entry C·BadEntry B·BadBlock Ke·KeyError D·DroppedEntry L·Level Q·SeqNum T·TimeElapsed
+00:10:24.812712 version@stat F·[1] S·420B[420B] Sc·[0.25]
+00:10:24.812746 db@open opening
+00:10:24.812790 journal@recovery F·1
+00:10:24.813311 journal@recovery recovering @7
+00:10:24.814596 version@stat F·[1] S·420B[420B] Sc·[0.25]
+00:10:26.226759 db@janitor F·3 G·0
+00:10:26.227019 db@open done T·1.414199769s
+=============== Dec 13, 2025 (CET) ===============
+00:20:06.791538 log@legend F·NumFile S·FileSize N·Entry C·BadEntry B·BadBlock Ke·KeyError D·DroppedEntry L·Level Q·SeqNum T·TimeElapsed
+00:20:06.793141 version@stat F·[1] S·420B[420B] Sc·[0.25]
+00:20:06.793255 db@open opening
+00:20:06.793372 journal@recovery F·1
+00:20:06.793751 journal@recovery recovering @9
+00:20:06.796347 version@stat F·[1] S·420B[420B] Sc·[0.25]
+00:20:06.844067 db@janitor F·3 G·0
+00:20:06.844437 db@open done T·51.026872ms

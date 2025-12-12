@@ -146,9 +146,22 @@ func (s *Server) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
 		result, err := HandleSendNative(s.bc, req.Params)
 		writeJSON(w, result, err)
 
+	case "gorr_adminMint":
+		result, err := HandleAdminMint(s.bc, req.Params)
+		writeJSON(w, result, err)
+
+	case "gorr_adminBurn":
+		result, err := HandleAdminBurn(s.bc, req.Params)
+		writeJSON(w, result, err)
+
+	case "gorr_adminForceTransfer":
+		result, err := HandleAdminForceTransfer(s.bc, req.Params)
+		writeJSON(w, result, err)
+
 	default:
 		writeError(w, fmt.Errorf("method not found: %s", req.Method))
 	}
+
 }
 
 // ------------------------------------------------------------

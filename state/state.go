@@ -7,7 +7,16 @@ import (
 )
 
 type State struct {
-	db *StateDB
+	db     *StateDB
+	Paused bool
+
+	// --- D.3 Admin accounting ---
+	totalSupply map[string]*big.Int
+	fees        map[string]*big.Int
+}
+
+type Fees struct {
+	MerchantFeeBps uint64 // bv 100 = 1%
 }
 
 func NewState(path string) (*State, error) {
@@ -15,7 +24,11 @@ func NewState(path string) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &State{db: db}, nil
+	return &State{
+		db:          db,
+		totalSupply: make(map[string]*big.Int),
+		fees:        make(map[string]*big.Int),
+	}, nil
 }
 
 func (s *State) Close() error {
@@ -78,6 +91,48 @@ func (s *State) IncreaseNonce(addr common.Address) error {
 	if err != nil {
 		return err
 	}
-	acc.Nonce++
 	return s.db.SaveAccount(acc)
+}
+
+// ---------------- TOTAL SUPPLY ----------------
+
+func (s *State) AddSupply(token string, amount *big.Int) {
+	if s.totalSupply[token] == nil {
+		s.totalSupply[token] = big.NewInt(0)
+	}
+	s.totalSupply[token].Add(s.totalSupply[token], amount)
+}
+
+func (s *State) SubSupply(token string, amount *big.Int) error {
+	if s.totalSupply[token] == nil {
+		return nil // supply onbekend = permissive
+	}
+	if s.totalSupply[token].Cmp(amount) < 0 {
+		return nil // geen hard fail, admin mag burnen
+	}
+	s.totalSupply[token].Sub(s.totalSupply[token], amount)
+	return nil
+}
+
+func (s *State) GetTotalSupply(token string) *big.Int {
+	if s.totalSupply[token] == nil {
+		return big.NewInt(0)
+	}
+	return new(big.Int).Set(s.totalSupply[token])
+}
+
+// ---------------- FEES ----------------
+
+func (s *State) AddFee(token string, amount *big.Int) {
+	if s.fees[token] == nil {
+		s.fees[token] = big.NewInt(0)
+	}
+	s.fees[token].Add(s.fees[token], amount)
+}
+
+func (s *State) GetFees(token string) *big.Int {
+	if s.fees[token] == nil {
+		return big.NewInt(0)
+	}
+	return new(big.Int).Set(s.fees[token])
 }
