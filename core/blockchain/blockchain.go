@@ -54,7 +54,6 @@ func deriveKey(seed string, index uint32) (*ecdsa.PrivateKey, common.Address) {
 	priv.PublicKey.X, priv.PublicKey.Y = curve.ScalarBaseMult(d.Bytes())
 
 	address := gethcrypto.PubkeyToAddress(priv.PublicKey)
-
 	return priv, address
 }
 
@@ -110,7 +109,7 @@ type Blockchain struct {
 	State     *state.State
 	TxPool    *txpool.TxPool
 
-	// Payments / Gateway – zelfde instance
+	// Payments / Gateway – same instance
 	Payment *payment_gateway.PaymentGateway
 	Gateway *payment_gateway.PaymentGateway
 
@@ -124,17 +123,17 @@ type Blockchain struct {
 // --------------------------------------------------------
 
 func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
-	// Init lege struct
 	bc := &Blockchain{
 		dataDir:   filepath.Join(dataDir, "chaindata"),
 		networkID: networkID,
 	}
 
-	// State laden
+	// Ensure dirs exist
 	if err := os.MkdirAll(bc.dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create data dir: %v", err)
 	}
 
+	// Load state DB
 	st, err := state.NewState(filepath.Join(dataDir, "state"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to load state db: %v", err)
@@ -144,18 +143,20 @@ func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 	// TxPool
 	bc.TxPool = txpool.NewTxPool()
 
-	// PaymentGateway instantiëren en op beide velden zetten
+	// Payment gateway (one instance, two fields for compatibility)
 	pg := payment_gateway.NewPaymentGateway()
 	bc.Payment = pg
 	bc.Gateway = pg
 
-	// Head proberen te laden
+	// Load head
 	head, err := bc.loadHead()
 	if err != nil {
 		return nil, err
 	}
 
+	// ========================================================
 	// GENESIS
+	// ========================================================
 	if head == nil {
 		fmt.Println("[GENESIS] No existing blockchain, creating genesis block...")
 
@@ -173,14 +174,21 @@ func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 		fmt.Println("[GENESIS] Admin wallet:", admin.Hex())
 		fmt.Println("[GENESIS] Treasury wallet:", treasury.Hex())
 
-		totalGORR := new(big.Int).SetUint64(100_000_000_000)
-		totalUSDCc := new(big.Int).SetUint64(100_000_000_000)
+		// ---- ALL balances stored in WEI (1 token = 1e18) ----
+		wei := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 
-		adminAlloc := new(big.Int).SetUint64(10_000_000)
+		// Total supply: 100,000,000,000 GORR & 100,000,000,000 USDCc (in wei)
+		totalGORR := new(big.Int).Mul(big.NewInt(100_000_000_000), wei)
+		totalUSDCc := new(big.Int).Mul(big.NewInt(100_000_000_000), wei)
 
+		// Admin gets 10,000,000 tokens (in wei)
+		adminAlloc := new(big.Int).Mul(big.NewInt(10_000_000), wei)
+
+		// Treasury gets the remainder (in wei)
 		treasuryGORR := new(big.Int).Sub(totalGORR, adminAlloc)
 		treasuryUSDCc := new(big.Int).Sub(totalUSDCc, adminAlloc)
 
+		// Set balances
 		bc.State.SetBalance(admin, adminAlloc)
 		bc.State.SetBalance(treasury, treasuryGORR)
 
@@ -208,15 +216,13 @@ func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 
 		fmt.Println("[GENESIS] Genesis block #0 created.")
 	} else {
-		// Chain bestaat al → wallets opnieuw lezen zodat
-		// AdminAddr / TreasuryAddr gevuld zijn
+		// Existing chain → reload wallets for AdminAddr/TreasuryAddr
 		wallets, err := loadSystemWallets(dataDir)
 		if err != nil {
 			return nil, fmt.Errorf("wallet load error on existing chain: %w", err)
 		}
 		bc.AdminAddr = wallets.Admin.Address
 		bc.TreasuryAddr = wallets.Treasury.Address
-
 		bc.head = head
 	}
 

@@ -1,10 +1,10 @@
 {
   "admin": {
-    "address": "0x936808d3950Dab542bEF8E71D2d7d36A0bB538ec",
+    "address": "0x936808d3950dab542bef8e71d2d7d36a0bb538ec",
     "privateKey": "8685f1623ece272cde76efa71074da44d542e8036c2fe1e535ea6d1ee47987fd"
   },
   "treasury": {
-    "address": "0x2F74AF61214E89796C37966d4B674a5aE148aa82",
+    "address": "0x2f74af61214e89796c37966d4b674a5ae148aa82",
     "privateKey": "aa7cfa68f550d384f7032d917d6ccada8b50df1e2d3fdac4cf6556eaba03ec09"
   }
 }
