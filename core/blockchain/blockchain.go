@@ -13,6 +13,7 @@ import (
 
 	"github.com/Siasom1/gorrillazz-chain/core/txpool"
 	"github.com/Siasom1/gorrillazz-chain/core/types"
+	"github.com/Siasom1/gorrillazz-chain/events"
 	"github.com/Siasom1/gorrillazz-chain/state"
 
 	payment_gateway "github.com/Siasom1/gorrillazz-chain/modules/payment_gateway"
@@ -108,6 +109,7 @@ type Blockchain struct {
 	head      *types.Block
 	State     *state.State
 	TxPool    *txpool.TxPool
+	Events    *events.EventBus
 
 	// Payments / Gateway – same instance
 	Payment *payment_gateway.PaymentGateway
@@ -125,6 +127,7 @@ type Blockchain struct {
 func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 	bc := &Blockchain{
 		dataDir:   filepath.Join(dataDir, "chaindata"),
+		Events:    events.NewEventBus(),
 		networkID: networkID,
 	}
 

@@ -152,20 +152,32 @@ func (s *Server) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
 
 	case "gorr_sendTransaction":
 		res, err := HandleSendNative(s.bc, req.Params)
+		if err == nil {
+			s.bus.EmitTx(res)
+		}
 		writeJSON(w, req.ID, res, err)
 
 	case "gorr_sendUSDCc":
 		res, err := HandleSendUSDCc(s.bc, req.Params)
+		if err == nil {
+			s.bus.EmitTx(res)
+		}
 		writeJSON(w, req.ID, res, err)
 
 	// -------- ADMIN --------
 
 	case "gorr_adminMint":
 		res, err := HandleAdminMint(s.bc, req.Params)
+		if err == nil {
+			s.bus.EmitTx(res)
+		}
 		writeJSON(w, req.ID, res, err)
 
 	case "gorr_adminBurn":
 		res, err := HandleAdminBurn(s.bc, req.Params)
+		if err == nil {
+			s.bus.EmitTx(res)
+		}
 		writeJSON(w, req.ID, res, err)
 
 	case "gorr_adminSetFees":
@@ -174,10 +186,22 @@ func (s *Server) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
 
 	case "gorr_adminPauseTransfers":
 		res, err := HandlePauseTransfers(s.bc, req.Params)
+		if err == nil {
+			s.bus.EmitBlock(map[string]interface{}{
+				"type":   "admin.pause",
+				"paused": res,
+			})
+		}
 		writeJSON(w, req.ID, res, err)
 
 	case "gorr_adminForceTransfer":
 		res, err := HandleAdminForceTransfer(s.bc, req.Params)
+		if err == nil {
+			s.bus.EmitBlock(map[string]interface{}{
+				"type":   "admin.pause",
+				"paused": res,
+			})
+		}
 		writeJSON(w, req.ID, res, err)
 
 	case "gorr_adminMintToTreasury":

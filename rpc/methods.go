@@ -528,15 +528,7 @@ func HandlePauseTransfers(
 	// state update
 	bc.State.Paused = paused
 
-	// 🔥 EVENT EMIT (D.4.2)
-	if bc.Events != nil {
-		bc.Events.EmitState(map[string]any{
-			"scope": "admin",
-			"payload": map[string]any{
-				"paused": paused,
-			},
-		})
-	}
+	fmt.Println("🔥 EMIT PAUSE EVENT", paused)
 
 	return map[string]any{
 		"success": true,

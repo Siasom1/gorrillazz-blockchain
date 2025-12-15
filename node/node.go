@@ -42,6 +42,7 @@ func NewNode(cfg *Config) (*Node, error) {
 	}
 
 	// Block producer
+	chain.Events = bus
 	prod := producer.NewBlockProducer(
 		chain,
 		logger,
