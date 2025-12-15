@@ -136,3 +136,63 @@ func (s *State) GetFees(token string) *big.Int {
 	}
 	return new(big.Int).Set(s.fees[token])
 }
+
+// ---------------- FEES (ADMIN) --------------
+
+// ---------------- FEES / CONFIG ----------------
+
+func (s *State) GetMerchantFeeBps() uint64 {
+	if s.db.Meta == nil {
+		return 0
+	}
+	return s.db.Meta.MerchantFeeBps
+}
+
+func (s *State) SetMerchantFeeBps(bps uint64) {
+	if s.db.Meta == nil {
+		return
+	}
+	s.db.Meta.MerchantFeeBps = bps
+}
+
+// ---------------- FEES (COLLECTED) ----------------
+
+func (s *State) GetCollectedFees(token string) *big.Int {
+	if s.db.Meta == nil || s.db.Meta.Fees == nil {
+		return big.NewInt(0)
+	}
+	if s.db.Meta.Fees[token] == nil {
+		return big.NewInt(0)
+	}
+	return new(big.Int).Set(s.db.Meta.Fees[token])
+}
+
+func (s *State) AddCollectedFee(token string, amount *big.Int) {
+	if s.db.Meta == nil {
+		return
+	}
+	if s.db.Meta.Fees == nil {
+		s.db.Meta.Fees = make(map[string]*big.Int)
+	}
+	if s.db.Meta.Fees[token] == nil {
+		s.db.Meta.Fees[token] = big.NewInt(0)
+	}
+	s.db.Meta.Fees[token].Add(s.db.Meta.Fees[token], amount)
+	_ = s.db.SaveMeta()
+}
+
+func (s *State) SubCollectedFee(token string, amount *big.Int) error {
+	if amount == nil || amount.Sign() <= 0 {
+		return nil
+	}
+	if s.db == nil || s.db.Meta == nil || s.db.Meta.Fees == nil || s.db.Meta.Fees[token] == nil {
+		return nil
+	}
+	// clamp (geen crash als admin teveel vraagt)
+	if s.db.Meta.Fees[token].Cmp(amount) < 0 {
+		s.db.Meta.Fees[token].SetInt64(0)
+	} else {
+		s.db.Meta.Fees[token].Sub(s.db.Meta.Fees[token], amount)
+	}
+	return s.db.SaveMeta()
+}

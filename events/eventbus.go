@@ -2,32 +2,71 @@ package events
 
 import "sync"
 
-type Callback func(event interface{})
-
+// EventBus is een simpele pub/sub bus
 type EventBus struct {
-	mu   sync.RWMutex
-	subs map[string][]Callback
+	mu sync.RWMutex
+
+	txSubs    []chan interface{}
+	blockSubs []chan interface{}
 }
 
+// NewEventBus maakt een nieuwe bus
 func NewEventBus() *EventBus {
 	return &EventBus{
-		subs: make(map[string][]Callback),
+		txSubs:    make([]chan interface{}, 0),
+		blockSubs: make([]chan interface{}, 0),
 	}
 }
 
-func (b *EventBus) Subscribe(event string, cb Callback) {
+// --------------------
+// SUBSCRIBE
+// --------------------
+
+func (b *EventBus) SubscribeTxs() <-chan interface{} {
+	ch := make(chan interface{}, 16)
+
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.subs[event] = append(b.subs[event], cb)
+	b.txSubs = append(b.txSubs, ch)
+	b.mu.Unlock()
+
+	return ch
 }
 
-func (b *EventBus) Emit(event string, payload interface{}) {
+func (b *EventBus) SubscribeBlocks() <-chan interface{} {
+	ch := make(chan interface{}, 16)
+
+	b.mu.Lock()
+	b.blockSubs = append(b.blockSubs, ch)
+	b.mu.Unlock()
+
+	return ch
+}
+
+// --------------------
+// PUBLISH
+// --------------------
+
+func (b *EventBus) PublishTx(event interface{}) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	if cbs, ok := b.subs[event]; ok {
-		for _, cb := range cbs {
-			go cb(payload)
+	for _, ch := range b.txSubs {
+		select {
+		case ch <- event:
+		default:
+			// drop if slow consumer
+		}
+	}
+}
+
+func (b *EventBus) PublishBlock(event interface{}) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for _, ch := range b.blockSubs {
+		select {
+		case ch <- event:
+		default:
 		}
 	}
 }

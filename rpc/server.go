@@ -3,7 +3,6 @@ package rpc
 import (
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"net/http"
 	"strconv"
 
@@ -12,18 +11,29 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
+//
+// ------------------------------------------------------------
+// SERVER
+// ------------------------------------------------------------
+//
+
 type Server struct {
 	bc  *blockchain.Blockchain
 	bus *events.EventBus
 }
 
 func NewServer(bc *blockchain.Blockchain, bus *events.EventBus) *Server {
-	return &Server{bc: bc, bus: bus}
+	return &Server{
+		bc:  bc,
+		bus: bus,
+	}
 }
 
+//
 // ------------------------------------------------------------
-// JSON RESPONSE HELPERS
+// JSON-RPC TYPES
 // ------------------------------------------------------------
+//
 
 type rpcReq struct {
 	JSONRPC string        `json:"jsonrpc"`
@@ -32,29 +42,13 @@ type rpcReq struct {
 	ID      interface{}   `json:"id"`
 }
 
-func writeResult(w http.ResponseWriter, id interface{}, result interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"jsonrpc": "2.0",
-		"result":  result,
-		"id":      id,
-	})
-}
+//
+// ------------------------------------------------------------
+// JSON-RPC RESPONSE HELPERS
+// ------------------------------------------------------------
+//
 
-func writeRPCError(w http.ResponseWriter, id interface{}, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"jsonrpc": "2.0",
-		"error": map[string]interface{}{
-			"code":    code,
-			"message": msg,
-		},
-		"id": id,
-	})
-}
-
-// writeJSON writes either a successful result or an RPC error using the provided id.
-func writeJSON(w http.ResponseWriter, result interface{}, err error) {
+func writeJSON(w http.ResponseWriter, id interface{}, result interface{}, err error) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if err != nil {
@@ -64,7 +58,7 @@ func writeJSON(w http.ResponseWriter, result interface{}, err error) {
 				"code":    -32000,
 				"message": err.Error(),
 			},
-			"id": nil,
+			"id": id,
 		})
 		return
 	}
@@ -72,26 +66,27 @@ func writeJSON(w http.ResponseWriter, result interface{}, err error) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"jsonrpc": "2.0",
 		"result":  result,
-		"id":      1,
+		"id":      id,
 	})
 }
 
-func writeError(w http.ResponseWriter, err error) {
-	writeJSON(w, nil, err)
-}
-
+//
 // ------------------------------------------------------------
-// START SERVER (JSON-RPC + REST)
+// SERVER START (JSON-RPC + REST + WS)
 // ------------------------------------------------------------
+//
 
 func StartRPCServer(port int, server *Server) {
 	mux := http.NewServeMux()
 
-	// JSON-RPC endpoint
+	// JSON-RPC
 	mux.HandleFunc("/", server.HandleJSONRPC)
 
-	// REST endpoint for Admin dashboard
+	// REST
 	mux.HandleFunc("/payments/merchant", server.handleGetMerchantPayments)
+
+	// WebSocket (D.4.2)
+	mux.HandleFunc("/ws", WSHandler(server.bus))
 
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Println("[RPC] Listening on", addr)
@@ -101,9 +96,11 @@ func StartRPCServer(port int, server *Server) {
 	}
 }
 
+//
 // ------------------------------------------------------------
 // REST: /payments/merchant?merchant=0x...
 // ------------------------------------------------------------
+//
 
 func (s *Server) handleGetMerchantPayments(w http.ResponseWriter, r *http.Request) {
 	merchant := r.URL.Query().Get("merchant")
@@ -111,169 +108,111 @@ func (s *Server) handleGetMerchantPayments(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "missing merchant", http.StatusBadRequest)
 		return
 	}
-	payments := s.bc.Payment.ListMerchantPayments(common.HexToAddress(merchant))
-	writeResult(w, nil, payments)
+
+	payments := s.bc.Payment.ListMerchantPayments(
+		common.HexToAddress(merchant),
+	)
+
+	writeJSON(w, nil, payments, nil)
 }
 
+//
+// ------------------------------------------------------------
+// JSON-RPC ROUTER
+// ------------------------------------------------------------
+//
+
 func (s *Server) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		JSONRPC string        `json:"jsonrpc"`
-		Method  string        `json:"method"`
-		Params  []interface{} `json:"params"`
-		ID      interface{}   `json:"id"`
-	}
+	var req rpcReq
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, err)
+		writeJSON(w, nil, nil, err)
 		return
 	}
 
 	switch req.Method {
 
+	// -------- SYSTEM --------
+
 	case "gorr_getSystemWallets":
-		result, err := HandleGetSystemWallets(s.bc, req.Params)
-		writeJSON(w, result, err)
+		res, err := HandleGetSystemWallets(s.bc, req.Params)
+		writeJSON(w, req.ID, res, err)
+
+	// -------- BALANCES --------
 
 	case "gorr_getBalance":
-		result, err := HandleGetBalance(s.bc, req.Params)
-		writeJSON(w, result, err)
+		res, err := HandleGetBalance(s.bc, req.Params)
+		writeJSON(w, req.ID, res, err)
 
 	case "gorr_getUSDCcBalance":
-		result, err := HandleGetUSDCcBalance(s.bc, req.Params)
-		writeJSON(w, result, err)
+		res, err := HandleGetUSDCcBalance(s.bc, req.Params)
+		writeJSON(w, req.ID, res, err)
+
+	// -------- TRANSFERS --------
 
 	case "gorr_sendTransaction":
-		result, err := HandleSendNative(s.bc, req.Params)
-		writeJSON(w, result, err)
+		res, err := HandleSendNative(s.bc, req.Params)
+		writeJSON(w, req.ID, res, err)
+
+	case "gorr_sendUSDCc":
+		res, err := HandleSendUSDCc(s.bc, req.Params)
+		writeJSON(w, req.ID, res, err)
+
+	// -------- ADMIN --------
 
 	case "gorr_adminMint":
-		result, err := HandleAdminMint(s.bc, req.Params)
-		writeJSON(w, result, err)
+		res, err := HandleAdminMint(s.bc, req.Params)
+		writeJSON(w, req.ID, res, err)
 
 	case "gorr_adminBurn":
-		result, err := HandleAdminBurn(s.bc, req.Params)
-		writeJSON(w, result, err)
+		res, err := HandleAdminBurn(s.bc, req.Params)
+		writeJSON(w, req.ID, res, err)
+
+	case "gorr_adminSetFees":
+		res, err := HandleSetFees(s.bc, req.Params)
+		writeJSON(w, req.ID, res, err)
+
+	case "gorr_adminPauseTransfers":
+		res, err := HandlePauseTransfers(s.bc, req.Params)
+		writeJSON(w, req.ID, res, err)
 
 	case "gorr_adminForceTransfer":
-		result, err := HandleAdminForceTransfer(s.bc, req.Params)
-		writeJSON(w, result, err)
+		res, err := HandleAdminForceTransfer(s.bc, req.Params)
+		writeJSON(w, req.ID, res, err)
+
+	case "gorr_adminMintToTreasury":
+		res, err := HandleAdminMintToTreasury(s.bc, req.Params)
+		writeJSON(w, req.ID, res, err)
+
+	case "gorr_adminWithdrawFees":
+		res, err := HandleAdminWithdrawFees(s.bc, req.Params)
+		writeJSON(w, req.ID, res, err)
+
+	case "gorr_adminStats":
+		res, err := HandleAdminStats(s.bc, req.Params)
+		writeJSON(w, req.ID, res, err)
+
+	// -------- FALLBACK --------
 
 	default:
-		writeError(w, fmt.Errorf("method not found: %s", req.Method))
+		writeJSON(
+			w,
+			req.ID,
+			nil,
+			fmt.Errorf("method not found: %s", req.Method),
+		)
 	}
-
 }
 
+//
 // ------------------------------------------------------------
-// PAYMENT INTENT METHODS (matchen met CreateIntent signature)
+// HELPERS (used by methods.go)
 // ------------------------------------------------------------
+//
 
-func HandleCreatePaymentIntent(bc *blockchain.Blockchain, params []interface{}) (interface{}, error) {
-	if len(params) < 1 {
-		return nil, fmt.Errorf("missing params")
-	}
-
-	raw, ok := params[0].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid params[0], expected object")
-	}
-
-	merchantStr, _ := raw["merchant"].(string)
-	if merchantStr == "" {
-		return nil, fmt.Errorf("missing merchant")
-	}
-	merchant := common.HexToAddress(merchantStr)
-
-	token, _ := raw["token"].(string)
-	if token == "" {
-		token = "GORR"
-	}
-
-	// amount kan number of string zijn
-	amount, err := parseBigInt(raw["amount"])
-	if err != nil {
-		return nil, fmt.Errorf("invalid amount: %w", err)
-	}
-
-	// expiry optional: seconds
-	expiry := uint64(900) // default 15 min
-	if v, exists := raw["expiry"]; exists {
-		exp, err := parseUint64(v)
-		if err != nil {
-			return nil, fmt.Errorf("invalid expiry: %w", err)
-		}
-		expiry = exp
-	}
-
-	intent, blockNumber, err := bc.Payment.CreateIntent(merchant, amount, token, expiry)
-	if err != nil {
-		return nil, err
-	}
-
-	return map[string]interface{}{
-		"intent":      intent,
-		"blockNumber": blockNumber,
-	}, nil
-}
-
-func HandleGetPaymentIntent(bc *blockchain.Blockchain, params []interface{}) (interface{}, error) {
-	if len(params) < 1 {
-		return nil, fmt.Errorf("missing id param")
-	}
-	id, err := parseUint64(params[0])
-	if err != nil {
-		return nil, fmt.Errorf("invalid id: %w", err)
-	}
-
-	intent, err := bc.Payment.GetIntent(id)
-	if err != nil {
-		return nil, err
-	}
-	return intent, nil
-}
-
-func HandleListMerchantPayments(bc *blockchain.Blockchain, params []interface{}) (interface{}, error) {
-	if len(params) < 1 {
-		return nil, fmt.Errorf("missing merchant param")
-	}
-	merchantStr, ok := params[0].(string)
-	if !ok || merchantStr == "" {
-		return nil, fmt.Errorf("invalid merchant param")
-	}
-	return bc.Payment.ListMerchantPayments(common.HexToAddress(merchantStr)), nil
-}
-
-// ------------------------------------------------------------
-// HELPERS: parse *big.Int / uint64 from JSON decoded types
-// ------------------------------------------------------------
-
-// parseBigInt accepteert:
-// - JSON number (float64) -> wordt int64 afgerond
-// - string ("12345")
-func parseBigInt(v interface{}) (*big.Int, error) {
-	switch t := v.(type) {
-	case float64:
-		// Let op: JSON numbers worden float64, dus dit is whole-number only
-		return big.NewInt(int64(t)), nil
-	case string:
-		if t == "" {
-			return nil, fmt.Errorf("empty string")
-		}
-		n := new(big.Int)
-		if _, ok := n.SetString(t, 10); !ok {
-			return nil, fmt.Errorf("cannot parse %q", t)
-		}
-		return n, nil
-	case json.Number:
-		n := new(big.Int)
-		if _, ok := n.SetString(t.String(), 10); !ok {
-			return nil, fmt.Errorf("cannot parse %q", t.String())
-		}
-		return n, nil
-	default:
-		return nil, fmt.Errorf("unsupported type %T", v)
-	}
-}
+// parseBigInt:
+// - float64 (JSON number)
+// - string ("123")
 
 func parseUint64(v interface{}) (uint64, error) {
 	switch t := v.(type) {
