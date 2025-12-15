@@ -2,71 +2,41 @@ package events
 
 import "sync"
 
-// EventBus is een simpele pub/sub bus
 type EventBus struct {
 	mu sync.RWMutex
 
-	txSubs    []chan interface{}
-	blockSubs []chan interface{}
+	Blocks   chan interface{}
+	Txs      chan interface{}
+	Payments chan interface{}
 }
 
-// NewEventBus maakt een nieuwe bus
 func NewEventBus() *EventBus {
 	return &EventBus{
-		txSubs:    make([]chan interface{}, 0),
-		blockSubs: make([]chan interface{}, 0),
+		Blocks:   make(chan interface{}, 100),
+		Txs:      make(chan interface{}, 100),
+		Payments: make(chan interface{}, 100),
 	}
 }
 
-// --------------------
-// SUBSCRIBE
-// --------------------
+// ---------- EMIT HELPERS ----------
 
-func (b *EventBus) SubscribeTxs() <-chan interface{} {
-	ch := make(chan interface{}, 16)
-
-	b.mu.Lock()
-	b.txSubs = append(b.txSubs, ch)
-	b.mu.Unlock()
-
-	return ch
-}
-
-func (b *EventBus) SubscribeBlocks() <-chan interface{} {
-	ch := make(chan interface{}, 16)
-
-	b.mu.Lock()
-	b.blockSubs = append(b.blockSubs, ch)
-	b.mu.Unlock()
-
-	return ch
-}
-
-// --------------------
-// PUBLISH
-// --------------------
-
-func (b *EventBus) PublishTx(event interface{}) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	for _, ch := range b.txSubs {
-		select {
-		case ch <- event:
-		default:
-			// drop if slow consumer
-		}
+func (b *EventBus) EmitBlock(block interface{}) {
+	select {
+	case b.Blocks <- block:
+	default:
 	}
 }
 
-func (b *EventBus) PublishBlock(event interface{}) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+func (b *EventBus) EmitTx(tx interface{}) {
+	select {
+	case b.Txs <- tx:
+	default:
+	}
+}
 
-	for _, ch := range b.blockSubs {
-		select {
-		case ch <- event:
-		default:
-		}
+func (b *EventBus) EmitPayment(p interface{}) {
+	select {
+	case b.Payments <- p:
+	default:
 	}
 }

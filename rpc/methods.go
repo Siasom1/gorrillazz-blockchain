@@ -506,7 +506,11 @@ func parseBigInt(v interface{}) (*big.Int, error) {
 	}
 }
 
-func HandlePauseTransfers(bc *blockchain.Blockchain, params []interface{}) (interface{}, error) {
+func HandlePauseTransfers(
+	bc *blockchain.Blockchain,
+	params []interface{},
+) (interface{}, error) {
+
 	if len(params) == 0 {
 		return nil, errors.New("missing params")
 	}
@@ -514,14 +518,27 @@ func HandlePauseTransfers(bc *blockchain.Blockchain, params []interface{}) (inte
 	raw := params[0].(map[string]interface{})
 
 	from := common.HexToAddress(raw["from"].(string))
+	paused := raw["paused"].(bool)
+
+	// admin check
 	if from != bc.AdminAddr {
 		return nil, errors.New("admin only")
 	}
 
-	paused := raw["paused"].(bool)
+	// state update
 	bc.State.Paused = paused
 
-	return map[string]interface{}{
+	// 🔥 EVENT EMIT (D.4.2)
+	if bc.Events != nil {
+		bc.Events.EmitState(map[string]any{
+			"scope": "admin",
+			"payload": map[string]any{
+				"paused": paused,
+			},
+		})
+	}
+
+	return map[string]any{
 		"success": true,
 		"paused":  paused,
 	}, nil
