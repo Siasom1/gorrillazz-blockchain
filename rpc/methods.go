@@ -196,6 +196,10 @@ func HandleAdminForceTransfer(bc *blockchain.Blockchain, params []interface{}) (
 		}
 		bc.State.AddBalance(to, amountWei)
 
+		if target == (common.Address{}) {
+			return nil, errors.New("invalid target")
+		}
+
 	case "USDCc":
 		bal, err := bc.State.GetUSDCcBalance(target)
 		if err != nil {
@@ -299,6 +303,10 @@ func HandleSendNative(bc *blockchain.Blockchain, params []interface{}) (interfac
 	if fee.Sign() > 0 {
 		bc.State.AddBalance(bc.TreasuryAddr, fee)
 		bc.State.AddCollectedFee("GORR", fee)
+	}
+
+	if bc.State.Paused {
+		return nil, errors.New("transfers paused")
 	}
 
 	return map[string]interface{}{

@@ -20,12 +20,14 @@ import (
 type Server struct {
 	bc  *blockchain.Blockchain
 	bus *events.EventBus
+	eth *ethRPC
 }
 
 func NewServer(bc *blockchain.Blockchain, bus *events.EventBus) *Server {
 	return &Server{
 		bc:  bc,
 		bus: bus,
+		eth: newEthRPC(bc),
 	}
 }
 
@@ -109,10 +111,7 @@ func (s *Server) handleGetMerchantPayments(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	payments := s.bc.Payment.ListMerchantPayments(
-		common.HexToAddress(merchant),
-	)
-
+	payments := s.bc.Payment.ListMerchantPayments(common.HexToAddress(merchant))
 	writeJSON(w, nil, payments, nil)
 }
 
@@ -127,6 +126,22 @@ func (s *Server) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, nil, nil, err)
+		return
+	}
+
+	// ------------------------------------------------------------
+	// Ethereum JSON-RPC routing (D.5.1)
+	// ------------------------------------------------------------
+
+	// ------------------------------------------------------------
+	// Ethereum JSON-RPC routing (D.5.1)
+	// ------------------------------------------------------------
+	if len(req.Method) >= 4 &&
+		(req.Method[:4] == "eth_" ||
+			req.Method == "net_version" ||
+			req.Method == "web3_clientVersion") {
+
+		HandleEthRPC(w, req, s.eth)
 		return
 	}
 

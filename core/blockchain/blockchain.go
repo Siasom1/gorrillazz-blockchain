@@ -111,6 +111,8 @@ type Blockchain struct {
 	TxPool    *txpool.TxPool
 	Events    *events.EventBus
 
+	NativeSymbol string
+
 	// Payments / Gateway – same instance
 	Payment *payment_gateway.PaymentGateway
 	Gateway *payment_gateway.PaymentGateway
@@ -124,27 +126,28 @@ type Blockchain struct {
 // Constructor
 // --------------------------------------------------------
 
-func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
+func NewBlockchainWithConfig(cfg ChainConfig) (*Blockchain, error) {
 	bc := &Blockchain{
-		dataDir:   filepath.Join(dataDir, "chaindata"),
-		Events:    events.NewEventBus(),
-		networkID: networkID,
+		dataDir:      filepath.Join(cfg.DataDir, "chaindata"),
+		networkID:    cfg.NetworkID,
+		NativeSymbol: cfg.NativeSymbol,
 	}
 
 	// Ensure dirs exist
 	if err := os.MkdirAll(bc.dataDir, 0o755); err != nil {
-		return nil, fmt.Errorf("failed to create data dir: %v", err)
+		return nil, err
 	}
 
 	// Load state DB
-	st, err := state.NewState(filepath.Join(dataDir, "state"))
+	st, err := state.NewState(filepath.Join(cfg.DataDir, "state"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to load state db: %v", err)
+		return nil, err
 	}
 	bc.State = st
 
 	// TxPool
 	bc.TxPool = txpool.NewTxPool()
+	bc.Events = events.NewEventBus()
 
 	// Payment gateway (one instance, two fields for compatibility)
 	pg := payment_gateway.NewPaymentGateway()
@@ -163,9 +166,9 @@ func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 	if head == nil {
 		fmt.Println("[GENESIS] No existing blockchain, creating genesis block...")
 
-		wallets, err := loadSystemWallets(dataDir)
+		wallets, err := loadSystemWallets(cfg.DataDir)
 		if err != nil {
-			return nil, fmt.Errorf("wallet load error: %w", err)
+			return nil, err
 		}
 
 		admin := wallets.Admin.Address
@@ -174,62 +177,46 @@ func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
 		bc.AdminAddr = admin
 		bc.TreasuryAddr = treasury
 
-		fmt.Println("[GENESIS] Admin wallet:", admin.Hex())
-		fmt.Println("[GENESIS] Treasury wallet:", treasury.Hex())
-
-		// ---- ALL balances stored in WEI (1 token = 1e18) ----
 		wei := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 
-		// Total supply: 100,000,000,000 GORR & 100,000,000,000 USDCc (in wei)
-		totalGORR := new(big.Int).Mul(big.NewInt(100_000_000_000), wei)
-		totalUSDCc := new(big.Int).Mul(big.NewInt(100_000_000_000), wei)
-
-		// Admin gets 10,000,000 tokens (in wei)
+		total := new(big.Int).Mul(big.NewInt(100_000_000_000), wei)
 		adminAlloc := new(big.Int).Mul(big.NewInt(10_000_000), wei)
+		treasuryAlloc := new(big.Int).Sub(total, adminAlloc)
 
-		// Treasury gets the remainder (in wei)
-		treasuryGORR := new(big.Int).Sub(totalGORR, adminAlloc)
-		treasuryUSDCc := new(big.Int).Sub(totalUSDCc, adminAlloc)
-
-		// Set balances
 		bc.State.SetBalance(admin, adminAlloc)
-		bc.State.SetBalance(treasury, treasuryGORR)
+		bc.State.SetBalance(treasury, treasuryAlloc)
 
-		bc.State.SetUSDCcBalance(admin, adminAlloc)
-		bc.State.SetUSDCcBalance(treasury, treasuryUSDCc)
+		// ✅ EVM FUNDING (MetaMask / TrustWallet native balance)
+		// 👇 vervang dit adres door jouw MetaMask adres
+		evmUser := common.HexToAddress("0x936808d3950Dab542bEF8E71D2d7d36A0bB538ec")
+		evmFund := new(big.Int).Mul(big.NewInt(1_000_000), wei)
+		bc.State.SetBalance(evmUser, evmFund)
 
 		genesis := &types.Block{
 			Header: &types.Header{
-				ParentHash: common.Hash{},
-				Number:     0,
-				Time:       uint64(time.Now().Unix()),
-				StateRoot:  common.Hash{},
-				TxRoot:     common.Hash{},
+				Number: 0,
+				Time:   uint64(time.Now().Unix()),
 			},
-			Transactions: []*types.Transaction{},
 		}
 
 		bc.head = genesis
-		if err := bc.saveBlock(genesis); err != nil {
-			return nil, err
-		}
-		if err := bc.saveHead(); err != nil {
-			return nil, err
-		}
+		_ = bc.saveBlock(genesis)
+		_ = bc.saveHead()
 
-		fmt.Println("[GENESIS] Genesis block #0 created.")
+		fmt.Println("[GENESIS] Genesis complete")
 	} else {
-		// Existing chain → reload wallets for AdminAddr/TreasuryAddr
-		wallets, err := loadSystemWallets(dataDir)
-		if err != nil {
-			return nil, fmt.Errorf("wallet load error on existing chain: %w", err)
-		}
+		wallets, _ := loadSystemWallets(cfg.DataDir)
 		bc.AdminAddr = wallets.Admin.Address
 		bc.TreasuryAddr = wallets.Treasury.Address
 		bc.head = head
 	}
 
 	return bc, nil
+}
+
+func NewBlockchain(dataDir string, networkID uint64) (*Blockchain, error) {
+	cfg := DefaultChainConfig(dataDir, networkID)
+	return NewBlockchainWithConfig(cfg)
 }
 
 //
