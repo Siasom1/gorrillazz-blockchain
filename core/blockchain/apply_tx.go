@@ -7,23 +7,26 @@ import (
 )
 
 func (bc *Blockchain) applyTransaction(tx *types.Transaction) error {
-	switch tx.Token {
+	nonce, _ := bc.State.GetNonce(tx.From)
 
-	case types.TokenGORR:
+	if tx.Nonce != nonce {
+		return fmt.Errorf("invalid nonce")
+	}
+
+	switch tx.Token {
+	case "GORR":
 		if err := bc.State.SubBalance(tx.From, tx.Value); err != nil {
 			return err
 		}
 		bc.State.AddBalance(*tx.To, tx.Value)
 
-	case types.TokenUSDCc:
+	case "USDCc":
 		if err := bc.State.SubUSDCc(tx.From, tx.Value); err != nil {
 			return err
 		}
 		bc.State.AddUSDCc(*tx.To, tx.Value)
-
-	default:
-		return fmt.Errorf("unknown token")
 	}
 
+	bc.State.IncNonce(tx.From)
 	return nil
 }

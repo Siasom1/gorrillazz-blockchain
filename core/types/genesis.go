@@ -1,4 +1,3 @@
-// core/types/genesis.go
 package types
 
 import (
@@ -7,19 +6,20 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// NewGenesisBlock maakt block #0 met lege roots en geen transacties.
-// Alloc van balances doen we in de State (LevelDB), niet in dit block zelf.
-func NewGenesisBlock() *Block {
-	header := &Header{
-		ParentHash: common.Hash{}, // geen parent
-		Number:     0,             // genesis block
+func DefaultGenesis() *Block {
+	h := &Header{
+		Number:     0,
 		Time:       uint64(time.Now().Unix()),
-		StateRoot:  common.Hash{}, // voorlopig 0, echte root later
-		TxRoot:     common.Hash{}, // geen tx's
+		ParentHash: common.Hash{},
+		StateRoot:  common.Hash{},
+		TxRoot:     common.Hash{},
 	}
 
-	return &Block{
-		Header:       header,
+	b := &Block{
+		Header:       h,
 		Transactions: []*Transaction{},
 	}
+
+	b.Header.Hash = b.ComputeHash()
+	return b
 }

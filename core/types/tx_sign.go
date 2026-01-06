@@ -1,52 +1,59 @@
 package types
 
 import (
-	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
-// SignLegacy signs a transaction using private key
-func SignLegacy(tx *Transaction, privHex string, chainID *big.Int) error {
-	priv, err := crypto.HexToECDSA(privHex)
-	if err != nil {
-		return fmt.Errorf("invalid private key: %w", err)
-	}
-
-	hash := tx.Hash()
-
-	sig, err := crypto.Sign(hash.Bytes(), priv)
-	if err != nil {
-		return fmt.Errorf("sign failed: %w", err)
-	}
-
-	r := new(big.Int).SetBytes(sig[0:32])
-	s := new(big.Int).SetBytes(sig[32:64])
-	v := big.NewInt(int64(sig[64]))
+// RecoverSender recovers the sender address from a legacy (type 0) tx
+func RecoverSender(tx *Transaction, chainID *big.Int) (common.Address, error) {
+	// Legacy signing payload (EIP-155)
+	var sigData []interface{}
 
 	if chainID != nil {
-		v.Add(v, new(big.Int).Mul(chainID, big.NewInt(2)))
-		v.Add(v, big.NewInt(35))
+		sigData = []interface{}{
+			tx.Nonce,
+			tx.GasPrice,
+			tx.Gas,
+			tx.To,
+			tx.Value,
+			tx.Data,
+			chainID,
+			uint(0),
+			uint(0),
+		}
 	} else {
-		v.Add(v, big.NewInt(27))
+		sigData = []interface{}{
+			tx.Nonce,
+			tx.GasPrice,
+			tx.Gas,
+			tx.To,
+			tx.Value,
+			tx.Data,
+		}
 	}
 
-	tx.R = r
-	tx.S = s
-	tx.V = v
-
-	return nil
-}
-
-// Recover sender address
-func RecoverSender(tx *Transaction) (common.Address, error) {
-	if tx.R == nil || tx.S == nil || tx.V == nil {
-		return common.Address{}, fmt.Errorf("transaction not signed")
+	encoded, err := rlp.EncodeToBytes(sigData)
+	if err != nil {
+		return common.Address{}, err
 	}
 
-	recoveryID := byte((tx.V.Uint64() - 35) % 2)
+	hash := crypto.Keccak256Hash(encoded)
+
+	// --- recover V ---
+	v := tx.V.Uint64()
+	var recoveryID byte
+
+	if chainID != nil {
+		recoveryID = byte((v - 35 - 2*chainID.Uint64()) % 2)
+	} else {
+		recoveryID = byte(v - 27)
+	}
+
+	// --- build signature ---
 	sig := make([]byte, 65)
 
 	rb := tx.R.Bytes()
@@ -56,7 +63,7 @@ func RecoverSender(tx *Transaction) (common.Address, error) {
 	copy(sig[64-len(sb):64], sb)
 	sig[64] = recoveryID
 
-	pub, err := crypto.Ecrecover(tx.Hash().Bytes(), sig)
+	pub, err := crypto.Ecrecover(hash.Bytes(), sig)
 	if err != nil {
 		return common.Address{}, err
 	}

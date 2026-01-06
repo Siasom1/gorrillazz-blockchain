@@ -1,26 +1,17 @@
 package types
 
-import (
-	"encoding/json"
-
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
-)
+import "github.com/ethereum/go-ethereum/common"
 
 type Block struct {
-	Header *Header
-	Txs    []*Transaction
+	Header       *Header
+	Transactions []*Transaction
 }
 
 type Header struct {
-	Number uint64
-	Time   uint64
-	Hash   common.Hash
-	Parent common.Hash
-}
-
-// Compute deterministic block hash
-func (b *Block) ComputeHash() common.Hash {
-	data, _ := json.Marshal(b)
-	return crypto.Keccak256Hash(data)
+	Number     uint64
+	Time       uint64
+	ParentHash common.Hash
+	StateRoot  common.Hash
+	TxRoot     common.Hash
+	Hash       common.Hash
 }

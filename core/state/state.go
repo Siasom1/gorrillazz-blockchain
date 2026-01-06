@@ -164,3 +164,14 @@ func (s *State) Dump() {
 	}
 	fmt.Println("---------------------")
 }
+
+func (s *State) GetNonce(addr common.Address) (uint64, bool) {
+	acc := s.getOrCreate(addr)
+	return acc.Nonce, true
+}
+
+func (s *State) IncNonce(addr common.Address) {
+	acc := s.getOrCreate(addr)
+	acc.Nonce++
+	s.Commit()
+}
