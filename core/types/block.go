@@ -1,34 +1,26 @@
-// core/types/block.go
 package types
 
 import (
 	"encoding/json"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// Header beschrijft de metadata van een block
-type Header struct {
-	ParentHash common.Hash `json:"parentHash"`
-	Number     uint64      `json:"number"`
-	Time       uint64      `json:"timestamp"`
-	StateRoot  common.Hash `json:"stateRoot"`
-	TxRoot     common.Hash `json:"txRoot"`
-}
-
-// Block = header + lijst transacties
 type Block struct {
-	Header       *Header        `json:"header"`
-	Transactions []*Transaction `json:"transactions"`
+	Header *Header
+	Txs    []*Transaction
 }
 
-// SerializeHeader serialiseert alleen de header naar JSON (voor de hash)
-func (b *Block) SerializeHeader() []byte {
-	out, _ := json.Marshal(b.Header)
-	return out
+type Header struct {
+	Number uint64
+	Time   uint64
+	Hash   common.Hash
+	Parent common.Hash
 }
 
-// Hash berekent de block hash op basis van de header
-func (b *Block) Hash() common.Hash {
-	return common.BytesToHash(Keccak256(b.SerializeHeader()))
+// Compute deterministic block hash
+func (b *Block) ComputeHash() common.Hash {
+	data, _ := json.Marshal(b)
+	return crypto.Keccak256Hash(data)
 }

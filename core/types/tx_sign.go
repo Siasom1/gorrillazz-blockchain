@@ -1,24 +1,52 @@
 package types
 
 import (
-	"errors"
+	"fmt"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// From recovers the sender from an EIP-155 signed transaction.
-func (tx *Transaction) From() (common.Address, error) {
-	if tx.V == nil || tx.R == nil || tx.S == nil {
-		return common.Address{}, errors.New("missing signature")
+// SignLegacy signs a transaction using private key
+func SignLegacy(tx *Transaction, privHex string, chainID *big.Int) error {
+	priv, err := crypto.HexToECDSA(privHex)
+	if err != nil {
+		return fmt.Errorf("invalid private key: %w", err)
 	}
 
-	// Compute recovery id (EIP-155)
-	// V = 27/28 (no chainid) OR V = 35 + 2·chainId or 36 + 2·chainId
-	v := tx.V.Uint64()
-	recoveryID := byte((v - 35) % 2) // always 0 or 1
+	hash := tx.Hash()
 
-	// Build 65-byte signature [R || S || V]
+	sig, err := crypto.Sign(hash.Bytes(), priv)
+	if err != nil {
+		return fmt.Errorf("sign failed: %w", err)
+	}
+
+	r := new(big.Int).SetBytes(sig[0:32])
+	s := new(big.Int).SetBytes(sig[32:64])
+	v := big.NewInt(int64(sig[64]))
+
+	if chainID != nil {
+		v.Add(v, new(big.Int).Mul(chainID, big.NewInt(2)))
+		v.Add(v, big.NewInt(35))
+	} else {
+		v.Add(v, big.NewInt(27))
+	}
+
+	tx.R = r
+	tx.S = s
+	tx.V = v
+
+	return nil
+}
+
+// Recover sender address
+func RecoverSender(tx *Transaction) (common.Address, error) {
+	if tx.R == nil || tx.S == nil || tx.V == nil {
+		return common.Address{}, fmt.Errorf("transaction not signed")
+	}
+
+	recoveryID := byte((tx.V.Uint64() - 35) % 2)
 	sig := make([]byte, 65)
 
 	rb := tx.R.Bytes()
@@ -28,10 +56,7 @@ func (tx *Transaction) From() (common.Address, error) {
 	copy(sig[64-len(sb):64], sb)
 	sig[64] = recoveryID
 
-	// Hash per yellowpaper (Keccak256 of RLP of signing data)
-	h := tx.Hash()
-
-	pub, err := crypto.Ecrecover(h.Bytes(), sig)
+	pub, err := crypto.Ecrecover(tx.Hash().Bytes(), sig)
 	if err != nil {
 		return common.Address{}, err
 	}

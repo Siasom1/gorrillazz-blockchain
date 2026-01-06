@@ -9,10 +9,9 @@ type Receipt struct {
 	BlockHash        common.Hash `json:"blockHash"`
 	BlockNumber      uint64      `json:"blockNumber"`
 	TransactionIndex uint64      `json:"transactionIndex"`
-
-	From common.Address `json:"from"`
-	To   common.Address `json:"to"`
-
-	GasUsed uint64 `json:"gasUsed"`
-	Status  uint64 `json:"status"` // 1 = success
+	Status           uint64      `json:"status"`
+	GasUsed          uint64      `json:"gasUsed"`
+	Logs             []interface{}
+	From             common.Address `json:"from"`
+	To               common.Address `json:"to"`
 }

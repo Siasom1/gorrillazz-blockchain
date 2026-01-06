@@ -285,6 +285,16 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 	default:
 		writeJSON(w, req.ID, nil, fmt.Errorf("unsupported eth method: %s", req.Method))
 	}
+
+	case "eth_call":
+	callObj := req.Params[0].(map[string]interface{})
+	to := common.HexToAddress(callObj["to"].(string))
+	dataHex := callObj["data"].(string)
+	data, _ := hex.DecodeString(dataHex[2:])
+
+	res, err := e.Call(&to, data, common.Address{})
+	writeJSON(w, req.ID, "0x"+hex.EncodeToString(res), err)
+
 }
 
 //

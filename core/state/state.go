@@ -17,6 +17,7 @@ import (
 type AccountState struct {
 	Balance      *big.Int `json:"balance"`     // GORR
 	USDCcBalance *big.Int `json:"usdcBalance"` // USDCc
+	Nonce        uint64   `json:"nonce"`
 }
 
 type State struct {
