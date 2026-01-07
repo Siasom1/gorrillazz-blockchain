@@ -81,13 +81,8 @@ func writeJSON(w http.ResponseWriter, id interface{}, result interface{}, err er
 func StartRPCServer(port int, server *Server) {
 	mux := http.NewServeMux()
 
-	// JSON-RPC
 	mux.HandleFunc("/", server.HandleJSONRPC)
-
-	// REST
 	mux.HandleFunc("/payments/merchant", server.handleGetMerchantPayments)
-
-	// WebSocket (D.4.2)
 	mux.HandleFunc("/ws", WSHandler(server.bus))
 
 	addr := fmt.Sprintf(":%d", port)
@@ -100,7 +95,7 @@ func StartRPCServer(port int, server *Server) {
 
 //
 // ------------------------------------------------------------
-// REST: /payments/merchant?merchant=0x...
+// REST
 // ------------------------------------------------------------
 //
 
@@ -130,11 +125,7 @@ func (s *Server) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ------------------------------------------------------------
-	// Ethereum JSON-RPC routing (D.5.1)
-	// ------------------------------------------------------------
-
-	// ------------------------------------------------------------
-	// Ethereum JSON-RPC routing (D.5.1)
+	// Ethereum-compatible routing (MetaMask / TrustWallet)
 	// ------------------------------------------------------------
 	if len(req.Method) >= 4 &&
 		(req.Method[:4] == "eth_" ||
@@ -201,22 +192,10 @@ func (s *Server) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
 
 	case "gorr_adminPauseTransfers":
 		res, err := HandlePauseTransfers(s.bc, req.Params)
-		if err == nil {
-			s.bus.EmitBlock(map[string]interface{}{
-				"type":   "admin.pause",
-				"paused": res,
-			})
-		}
 		writeJSON(w, req.ID, res, err)
 
 	case "gorr_adminForceTransfer":
 		res, err := HandleAdminForceTransfer(s.bc, req.Params)
-		if err == nil {
-			s.bus.EmitBlock(map[string]interface{}{
-				"type":   "admin.pause",
-				"paused": res,
-			})
-		}
 		writeJSON(w, req.ID, res, err)
 
 	case "gorr_adminMintToTreasury":
@@ -231,27 +210,16 @@ func (s *Server) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
 		res, err := HandleAdminStats(s.bc, req.Params)
 		writeJSON(w, req.ID, res, err)
 
-	// -------- FALLBACK --------
-
 	default:
-		writeJSON(
-			w,
-			req.ID,
-			nil,
-			fmt.Errorf("method not found: %s", req.Method),
-		)
+		writeJSON(w, req.ID, nil, fmt.Errorf("method not found: %s", req.Method))
 	}
 }
 
 //
 // ------------------------------------------------------------
-// HELPERS (used by methods.go)
+// HELPERS
 // ------------------------------------------------------------
 //
-
-// parseBigInt:
-// - float64 (JSON number)
-// - string ("123")
 
 func parseUint64(v interface{}) (uint64, error) {
 	switch t := v.(type) {
@@ -261,12 +229,7 @@ func parseUint64(v interface{}) (uint64, error) {
 		}
 		return uint64(t), nil
 	case string:
-		if t == "" {
-			return 0, fmt.Errorf("empty string")
-		}
 		return strconv.ParseUint(t, 10, 64)
-	case json.Number:
-		return strconv.ParseUint(t.String(), 10, 64)
 	default:
 		return 0, fmt.Errorf("unsupported type %T", v)
 	}

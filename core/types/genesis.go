@@ -6,20 +6,32 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-func DefaultGenesis() *Block {
-	h := &Header{
-		Number:     0,
-		Time:       uint64(time.Now().Unix()),
-		ParentHash: common.Hash{},
-		StateRoot:  common.Hash{},
-		TxRoot:     common.Hash{},
+type GenesisConfig struct {
+	ChainID  uint64 `json:"chainId"`
+	Name     string `json:"name"`
+	Admin    string `json:"admin"`
+	Treasury string `json:"treasury"`
+}
+
+// BuildGenesisBlock maakt het genesis block
+func BuildGenesisBlock(cfg GenesisConfig) *Block {
+	// admin & treasury bewust ingelezen (later nodig voor mint)
+	admin := common.HexToAddress(cfg.Admin)
+	treasury := common.HexToAddress(cfg.Treasury)
+
+	// voorkom unused errors (voor nu)
+	_ = admin
+	_ = treasury
+
+	header := &Header{
+		Number: 0,
+		Time:   uint64(time.Now().Unix()),
 	}
 
-	b := &Block{
-		Header:       h,
+	block := &Block{
+		Header:       header,
 		Transactions: []*Transaction{},
 	}
 
-	b.Header.Hash = b.ComputeHash()
-	return b
+	return block
 }

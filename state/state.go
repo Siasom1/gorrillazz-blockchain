@@ -45,6 +45,9 @@ func (s *State) GetBalance(addr common.Address) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
+	if acc.Balances["GORR"] == nil {
+		acc.Balances["GORR"] = big.NewInt(0)
+	}
 	return new(big.Int).Set(acc.Balances["GORR"]), nil
 }
 
@@ -63,6 +66,9 @@ func (s *State) GetUSDCcBalance(addr common.Address) (*big.Int, error) {
 	acc, err := s.db.GetAccount(addr)
 	if err != nil {
 		return nil, err
+	}
+	if acc.Balances["USDCc"] == nil {
+		acc.Balances["USDCc"] = big.NewInt(0)
 	}
 	return new(big.Int).Set(acc.Balances["USDCc"]), nil
 }
@@ -86,11 +92,13 @@ func (s *State) GetNonce(addr common.Address) (uint64, error) {
 	return acc.Nonce, nil
 }
 
-func (s *State) IncreaseNonce(addr common.Address) error {
+// **Toevoeging: IncNonce werkt nu correct**
+func (s *State) IncNonce(addr common.Address) error {
 	acc, err := s.db.GetAccount(addr)
 	if err != nil {
 		return err
 	}
+	acc.Nonce++
 	return s.db.SaveAccount(acc)
 }
 
@@ -136,8 +144,6 @@ func (s *State) GetFees(token string) *big.Int {
 	}
 	return new(big.Int).Set(s.fees[token])
 }
-
-// ---------------- FEES (ADMIN) --------------
 
 // ---------------- FEES / CONFIG ----------------
 
@@ -188,7 +194,6 @@ func (s *State) SubCollectedFee(token string, amount *big.Int) error {
 	if s.db == nil || s.db.Meta == nil || s.db.Meta.Fees == nil || s.db.Meta.Fees[token] == nil {
 		return nil
 	}
-	// clamp (geen crash als admin teveel vraagt)
 	if s.db.Meta.Fees[token].Cmp(amount) < 0 {
 		s.db.Meta.Fees[token].SetInt64(0)
 	} else {

@@ -1,6 +1,10 @@
 package events
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/Siasom1/gorrillazz-chain/core/types"
+)
 
 type EventBus struct {
 	mu sync.RWMutex
@@ -8,6 +12,9 @@ type EventBus struct {
 	Blocks   chan interface{}
 	Txs      chan interface{}
 	Payments chan interface{}
+
+	blockSubscribers []chan *types.Block
+	txSubscribers    []chan *types.Transaction
 }
 
 func NewEventBus() *EventBus {
@@ -39,4 +46,18 @@ func (b *EventBus) EmitPayment(p interface{}) {
 	case b.Payments <- p:
 	default:
 	}
+}
+
+// ---------- SUBSCRIBE HELPERS ----------
+
+func (bus *EventBus) SubscribeBlocks(ch chan *types.Block) {
+	bus.mu.Lock()
+	defer bus.mu.Unlock()
+	bus.blockSubscribers = append(bus.blockSubscribers, ch)
+}
+
+func (bus *EventBus) SubscribeTxs(ch chan *types.Transaction) {
+	bus.mu.Lock()
+	defer bus.mu.Unlock()
+	bus.txSubscribers = append(bus.txSubscribers, ch)
 }

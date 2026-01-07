@@ -15,13 +15,9 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
-//
-// ------------------------------------------------------------
-// Ethereum JSON-RPC (LEGACY, MINIMAL) — D.5.2
-// ------------------------------------------------------------
-// ✅ Accept legacy signed tx (RLP), recover sender, apply state transfer,
-// and return txHash + receipt immediately (dev-mode).
-//
+// --------------------
+// ETH RPC STRUCTS
+// --------------------
 
 type ethRPC struct {
 	bc      *blockchain.Blockchain
@@ -40,8 +36,12 @@ type ethTxRecord struct {
 	Nonce       uint64
 	BlockNumber uint64
 	Time        uint64
-	Status      uint64 // 1 success, 0 fail
+	Status      uint64 // 1 = success, 0 = fail
 }
+
+// --------------------
+// CONSTRUCTOR
+// --------------------
 
 func newEthRPC(bc *blockchain.Blockchain) *ethRPC {
 	return &ethRPC{
@@ -52,12 +52,9 @@ func newEthRPC(bc *blockchain.Blockchain) *ethRPC {
 	}
 }
 
-//
-// ------------------------------------------------------------
-// ETH RPC ROUTER
-// ------------------------------------------------------------
-// Server.go calls: HandleEthRPC(w, req, s.eth)
-//
+// --------------------
+// ETH RPC HANDLER
+// --------------------
 
 func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 	switch req.Method {
@@ -80,7 +77,6 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 		writeJSON(w, req.ID, fmt.Sprintf("0x%x", head.Header.Number), nil)
 
 	case "eth_getBalance":
-		// params: [address, "latest"]
 		if len(req.Params) < 1 {
 			writeJSON(w, req.ID, nil, fmt.Errorf("missing address"))
 			return
@@ -92,7 +88,6 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 		}
 		addr := common.HexToAddress(addrHex)
 
-		// Your State.GetBalance returns 2 values in your project.
 		bal, _ := eth.bc.State.GetBalance(addr)
 		if bal == nil {
 			bal = big.NewInt(0)
@@ -100,18 +95,15 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 		writeJSON(w, req.ID, "0x"+bal.Text(16), nil)
 
 	case "eth_getTransactionCount":
-		// params: [address, "latest" | "pending"]
 		if len(req.Params) < 1 {
 			writeJSON(w, req.ID, nil, fmt.Errorf("missing address"))
 			return
 		}
-
 		addrHex, ok := req.Params[0].(string)
 		if !ok {
 			writeJSON(w, req.ID, nil, fmt.Errorf("invalid address"))
 			return
 		}
-
 		addr := common.HexToAddress(addrHex)
 
 		eth.mu.Lock()
@@ -121,15 +113,12 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 		writeJSON(w, req.ID, fmt.Sprintf("0x%x", nonce), nil)
 
 	case "eth_gasPrice":
-		// dev: free tx
 		writeJSON(w, req.ID, "0x0", nil)
 
 	case "eth_estimateGas":
-		// legacy transfer gas
 		writeJSON(w, req.ID, "0x5208", nil)
 
 	case "eth_sendRawTransaction":
-		// params: ["0x...rawRLP..."]
 		if len(req.Params) < 1 {
 			writeJSON(w, req.ID, nil, fmt.Errorf("missing raw tx"))
 			return
@@ -146,7 +135,7 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 			return
 		}
 
-		// nonce check (dev)
+		// nonce check
 		eth.mu.Lock()
 		expected := eth.nonces[from]
 		eth.mu.Unlock()
@@ -156,7 +145,6 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 			return
 		}
 
-		// basic checks
 		to := tx.To()
 		if to == nil || *to == (common.Address{}) {
 			writeJSON(w, req.ID, nil, fmt.Errorf("invalid to address"))
@@ -164,19 +152,21 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 		}
 
 		value := tx.Value()
-		if value == nil || value.Sign() <= 0 {
+		if value.Sign() <= 0 {
 			writeJSON(w, req.ID, nil, fmt.Errorf("invalid amount"))
 			return
 		}
 
-		// Apply state (GORR native in wei)
+		// Apply state
 		if err := eth.bc.State.SubBalance(from, value); err != nil {
 			writeJSON(w, req.ID, nil, err)
 			return
 		}
-		eth.bc.State.AddBalance(*to, value)
+		if err := eth.bc.State.AddBalance(*to, value); err != nil {
+			writeJSON(w, req.ID, nil, err)
+			return
+		}
 
-		// store record + bump nonce
 		txHash := tx.Hash()
 		head := eth.bc.Head()
 		var bn uint64
@@ -190,7 +180,7 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 			To:          to,
 			ValueWei:    new(big.Int).Set(value),
 			Nonce:       tx.Nonce(),
-			BlockNumber: bn, // dev: treat as mined "now"
+			BlockNumber: bn,
 			Time:        uint64(time.Now().Unix()),
 			Status:      1,
 		}
@@ -200,7 +190,6 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 		eth.nonces[from] = expected + 1
 		eth.mu.Unlock()
 
-		// Return tx hash
 		writeJSON(w, req.ID, txHash.Hex(), nil)
 
 	case "eth_getTransactionByHash":
@@ -220,7 +209,7 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 		eth.mu.Unlock()
 
 		if rec == nil {
-			writeJSON(w, req.ID, nil, nil) // JSON-RPC expects null when not found
+			writeJSON(w, req.ID, nil, nil)
 			return
 		}
 
@@ -229,7 +218,6 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 			toHex = rec.To.Hex()
 		}
 
-		// Minimal tx object for MetaMask/dev tooling
 		writeJSON(w, req.ID, map[string]interface{}{
 			"hash":             rec.Hash.Hex(),
 			"nonce":            fmt.Sprintf("0x%x", rec.Nonce),
@@ -266,12 +254,11 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 			toHex = rec.To.Hex()
 		}
 
-		// Minimal receipt
 		writeJSON(w, req.ID, map[string]interface{}{
 			"transactionHash":   rec.Hash.Hex(),
 			"transactionIndex":  "0x0",
 			"blockNumber":       fmt.Sprintf("0x%x", rec.BlockNumber),
-			"blockHash":         "0x" + strings.Repeat("0", 64), // dev placeholder
+			"blockHash":         "0x" + strings.Repeat("0", 64),
 			"from":              rec.From.Hex(),
 			"to":                toHex,
 			"cumulativeGasUsed": "0x0",
@@ -285,22 +272,11 @@ func HandleEthRPC(w http.ResponseWriter, req rpcReq, eth *ethRPC) {
 	default:
 		writeJSON(w, req.ID, nil, fmt.Errorf("unsupported eth method: %s", req.Method))
 	}
-
-	case "eth_call":
-	callObj := req.Params[0].(map[string]interface{})
-	to := common.HexToAddress(callObj["to"].(string))
-	dataHex := callObj["data"].(string)
-	data, _ := hex.DecodeString(dataHex[2:])
-
-	res, err := e.Call(&to, data, common.Address{})
-	writeJSON(w, req.ID, "0x"+hex.EncodeToString(res), err)
-
 }
 
-//
-// ------------------------------------------------------------
-// Helpers
-// ------------------------------------------------------------
+// --------------------
+// HELPERS
+// --------------------
 
 func decodeAndRecoverLegacyTx(rawHex string, chainID uint64) (*gethtypes.Transaction, common.Address, error) {
 	rawHex = strings.TrimPrefix(rawHex, "0x")
@@ -309,21 +285,17 @@ func decodeAndRecoverLegacyTx(rawHex string, chainID uint64) (*gethtypes.Transac
 		return nil, common.Address{}, fmt.Errorf("invalid hex: %w", err)
 	}
 
-	// Legacy tx RLP decode
 	var tx gethtypes.Transaction
 	if err := rlp.DecodeBytes(b, &tx); err != nil {
 		return nil, common.Address{}, fmt.Errorf("rlp decode failed: %w", err)
 	}
 
-	// EIP-155 signer (legacy + chainId)
 	signer := gethtypes.NewEIP155Signer(new(big.Int).SetUint64(chainID))
-
 	from, err := gethtypes.Sender(signer, &tx)
 	if err != nil {
 		return nil, common.Address{}, fmt.Errorf("signature recover failed: %w", err)
 	}
 
-	// ChainId sanity check (MetaMask always sets it)
 	if tx.ChainId() != nil && tx.ChainId().Uint64() != chainID {
 		return nil, common.Address{}, fmt.Errorf("wrong chainId: got %d want %d", tx.ChainId().Uint64(), chainID)
 	}
