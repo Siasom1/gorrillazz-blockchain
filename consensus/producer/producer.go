@@ -206,3 +206,10 @@ func parsePaymentIntentID(data []byte) (uint64, bool) {
 	}
 	return id, true
 }
+
+func (b *Block) Hash() common.Hash {
+	if b == nil || b.Header == nil {
+		return common.Hash{}
+	}
+	return b.Header.Hash()
+}
