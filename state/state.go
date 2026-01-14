@@ -105,6 +105,9 @@ func (s *State) IncNonce(addr common.Address) error {
 // ---------------- TOTAL SUPPLY ----------------
 
 func (s *State) AddSupply(token string, amount *big.Int) {
+	if amount == nil || amount.Sign() <= 0 {
+		return
+	}
 	if s.totalSupply[token] == nil {
 		s.totalSupply[token] = big.NewInt(0)
 	}
@@ -174,6 +177,9 @@ func (s *State) GetCollectedFees(token string) *big.Int {
 }
 
 func (s *State) AddCollectedFee(token string, amount *big.Int) {
+	if amount == nil || amount.Sign() <= 0 {
+		return
+	}
 	if s.db.Meta == nil {
 		return
 	}
