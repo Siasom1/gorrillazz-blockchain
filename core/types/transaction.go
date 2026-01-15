@@ -12,6 +12,7 @@ type Transaction struct {
 	// core
 	From   common.Address
 	To     common.Address
+	Value  uint64
 	Token  TokenType
 	Amount uint64
 	Fee    uint64

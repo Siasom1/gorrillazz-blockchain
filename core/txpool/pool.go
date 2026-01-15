@@ -1,59 +1,80 @@
 package txpool
 
 import (
+	"errors"
 	"sync"
+	"time"
 
-	"github.com/Siasom1/gorrillazz-chain/common"
 	"github.com/Siasom1/gorrillazz-chain/core/types"
 )
 
+var (
+	ErrPoolFull  = errors.New("txpool: pool full")
+	ErrTxExists  = errors.New("txpool: tx already exists")
+	ErrInvalidTx = errors.New("txpool: invalid transaction")
+)
+
 type TxPool struct {
-	mu   sync.RWMutex
-	pool map[common.Hash]*types.Transaction
+	mu      sync.RWMutex
+	pending map[string]*types.Transaction
+	maxSize int
+	timeout time.Duration
 }
 
-func NewTxPool() *TxPool {
+func New(maxSize int, timeout time.Duration) *TxPool {
 	return &TxPool{
-		pool: make(map[common.Hash]*types.Transaction),
+		pending: make(map[string]*types.Transaction),
+		maxSize: maxSize,
+		timeout: timeout,
 	}
 }
 
-func (tp *TxPool) Add(tx *types.Transaction) {
-	tp.mu.Lock()
-	defer tp.mu.Unlock()
-
-	// !!! Belangrijk: Hash() is functie, niet field
-	h := tx.Hash()
-	tp.pool[h] = tx
-}
-
-func (tp *TxPool) Get(hash common.Hash) (*types.Transaction, bool) {
-	tp.mu.RLock()
-	defer tp.mu.RUnlock()
-
-	tx, ok := tp.pool[hash]
-	return tx, ok
-}
-
-func (tp *TxPool) Pending() []*types.Transaction {
-	tp.mu.RLock()
-	defer tp.mu.RUnlock()
-
-	pending := make([]*types.Transaction, 0, len(tp.pool))
-	for _, tx := range tp.pool {
-		pending = append(pending, tx)
+func (p *TxPool) Add(tx *types.Transaction) error {
+	if tx == nil {
+		return ErrInvalidTx
 	}
-	return pending
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if len(p.pending) >= p.maxSize {
+		return ErrPoolFull
+	}
+
+	// HASH FIX → always convert to string for map key
+	h := tx.Hash().String()
+
+	if _, exists := p.pending[h]; exists {
+		return ErrTxExists
+	}
+
+	p.pending[h] = tx
+	return nil
 }
 
-func (tp *TxPool) Remove(hash common.Hash) {
-	tp.mu.Lock()
-	defer tp.mu.Unlock()
-	delete(tp.pool, hash)
+func (p *TxPool) Remove(tx *types.Transaction) {
+	if tx == nil {
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.pending, tx.Hash().String())
 }
 
-func (tp *TxPool) Count() int {
-	tp.mu.RLock()
-	defer tp.mu.RUnlock()
-	return len(tp.pool)
+func (p *TxPool) Pending() []*types.Transaction {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	out := make([]*types.Transaction, 0, len(p.pending))
+	for _, tx := range p.pending {
+		out = append(out, tx)
+	}
+	return out
+}
+
+func (p *TxPool) Clear() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pending = make(map[string]*types.Transaction)
 }

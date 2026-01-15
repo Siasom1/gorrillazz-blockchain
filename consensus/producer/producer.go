@@ -54,6 +54,49 @@ func (bp *BlockProducer) Start() {
 	}()
 }
 
+func (bp *BlockProducer) processGORR(tx *types.Transaction, from common.Address, b *types.Block) bool {
+	if tx.To == nil {
+		return false
+	}
+
+	fromBal, _ := bp.chain.State.GetBalance(from)
+	if fromBal.Cmp(tx.Value) < 0 {
+		return false
+	}
+
+	toBal, _ := bp.chain.State.GetBalance(*tx.To)
+
+	bp.chain.State.SetBalance(from, new(big.Int).Sub(fromBal, tx.Value))
+	bp.chain.State.SetBalance(*tx.To, new(big.Int).Add(toBal, tx.Value))
+
+	return true
+}
+
+func (bp *BlockProducer) processUSDCc(tx *types.Transaction, from common.Address, b *types.Block) bool {
+	if tx.To == nil {
+		return false
+	}
+
+	fromBal, _ := bp.chain.State.GetUSDCcBalance(from)
+	if fromBal.Cmp(tx.Value) < 0 {
+		return false
+	}
+
+	fee := new(big.Int).Mul(tx.Value, big.NewInt(250)) // 2.5%
+	fee.Div(fee, big.NewInt(10000))
+	net := new(big.Int).Sub(tx.Value, fee)
+
+	toBal, _ := bp.chain.State.GetUSDCcBalance(*tx.To)
+	treasuryBal, _ := bp.chain.State.GetUSDCcBalance(bp.chain.TreasuryAddr)
+
+	bp.chain.State.SetUSDCcBalance(from, new(big.Int).Sub(fromBal, tx.Value))
+	bp.chain.State.SetUSDCcBalance(*tx.To, new(big.Int).Add(toBal, net))
+	bp.chain.State.SetUSDCcBalance(bp.chain.TreasuryAddr, new(big.Int).Add(treasuryBal, fee))
+
+	return true
+}
+
+
 func (bp *BlockProducer) Stop() {
 	close(bp.quit)
 }
