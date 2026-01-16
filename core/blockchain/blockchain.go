@@ -103,6 +103,10 @@ func loadSystemWallets(datadir string) (WalletsFile, error) {
 // Blockchain Struct
 // --------------------------------------------------------
 
+type Validator interface {
+	Validate(tx *types.Transaction) error
+}
+
 type Blockchain struct {
 	dataDir   string
 	networkID uint64
@@ -119,6 +123,7 @@ type Blockchain struct {
 
 	AdminAddr    common.Address
 	TreasuryAddr common.Address
+	validator    Validator
 }
 
 //
@@ -144,14 +149,16 @@ func NewBlockchainWithConfig(cfg ChainConfig) (*Blockchain, error) {
 		return nil, err
 	}
 	bc.State = st
-
 	// TxPool
-	bc.TxPool = txpool.NewTxPool()
-	bc.Events = events.NewEventBus()
+	bc.TxPool = txpool.New(5000, 10*time.Minute)
 
 	// Payment gateway (one instance, two fields for compatibility)
 	pg := payment_gateway.NewPaymentGateway()
 	bc.Payment = pg
+	bc.Gateway = pg
+
+	// Initialize validator (replace with actual validator implementation)
+	bc.validator = nil
 	bc.Gateway = pg
 
 	// Load head
@@ -355,4 +362,19 @@ func (bc *Blockchain) FindTxBlock(txHash common.Hash) (uint64, error) {
 		return 0, fmt.Errorf("tx not indexed")
 	}
 	return num, nil
+}
+
+func (bc *Blockchain) CurrentBlock() *types.Block {
+	return bc.head
+}
+
+func (bc *Blockchain) ValidateTx(tx *types.Transaction) error {
+	if bc.validator == nil {
+		return nil
+	}
+	return bc.validator.Validate(tx)
+}
+
+func (bc *Blockchain) BroadcastTx(tx *types.Transaction) {
+	bc.consensus.Broadcast(tx)
 }

@@ -53,18 +53,13 @@ func (p *TxPool) Add(tx *types.Transaction) error {
 }
 
 func (p *TxPool) Remove(tx *types.Transaction) {
-	if tx == nil {
-		return
-	}
-
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.pending, tx.Hash().String())
 }
-
 func (p *TxPool) Pending() []*types.Transaction {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
 	out := make([]*types.Transaction, 0, len(p.pending))
 	for _, tx := range p.pending {
