@@ -328,3 +328,135 @@ export async function getTransactionReceipt(
     throw err;
   }
 }
+// ============================================================================
+// PRODUCTION NETWORK CONFIG (MAINNET)
+// Added helpers – NO breaking changes
+// ============================================================================
+
+import { BrowserProvider, ethers } from "ethers";
+
+/*
+ MAINNET
+*/
+export const GORR_CHAIN_ID = 799797;
+export const GORR_CHAIN_ID_HEX = "0xC34F5";
+
+export const GORR_NETWORK_PARAMS = {
+  chainId: GORR_CHAIN_ID_HEX,
+  chainName: "gorrillazz",
+  rpcUrls: [RPC_URL],
+  nativeCurrency: {
+    name: "Gorrillazz",
+    symbol: "GORR",
+    decimals: 18,
+  },
+  blockExplorerUrls: [RPC_URL],
+};
+
+// ============================================================================
+// WALLET (MetaMask / Trust / etc)
+// ============================================================================
+
+export function getInjectedProvider(): BrowserProvider | null {
+  if (typeof window === "undefined") return null;
+  if (!(window as any).ethereum) return null;
+
+  return new BrowserProvider((window as any).ethereum);
+}
+
+export async function connectWalletSigner(): Promise<Signer> {
+  const provider = getInjectedProvider();
+  if (!provider) throw new Error("Wallet not found");
+
+  await provider.send("eth_requestAccounts", []);
+  return provider.getSigner();
+}
+
+// ============================================================================
+// AUTO NETWORK SWITCH / ADD
+// ============================================================================
+
+export async function ensureGorrNetwork(): Promise<void> {
+  if (typeof window === "undefined") return;
+
+  const eth = (window as any).ethereum;
+  if (!eth) return;
+
+  const current = await eth.request({ method: "eth_chainId" });
+
+  if (current === GORR_CHAIN_ID_HEX) return;
+
+  try {
+    await eth.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: GORR_CHAIN_ID_HEX }],
+    });
+  } catch {
+    await eth.request({
+      method: "wallet_addEthereumChain",
+      params: [GORR_NETWORK_PARAMS],
+    });
+  }
+}
+
+// ============================================================================
+// SIMPLE SEND (no intent)
+// ============================================================================
+
+export async function sendGORR(
+  to: string,
+  amountEther: string
+): Promise<string> {
+  const signer = await connectWalletSigner();
+  await ensureGorrNetwork();
+
+  const tx = await signer.sendTransaction({
+    to,
+    value: ethers.parseEther(amountEther),
+  });
+
+  return tx.hash;
+}
+
+// ============================================================================
+// REALTIME HELPERS
+// ============================================================================
+
+/*
+ Listen for new blocks (merchant dashboard live updates)
+*/
+export function onNewBlock(cb: (blockNumber: number) => void) {
+  const provider = getGorrProvider();
+  provider.on("block", cb);
+
+  return () => provider.off("block", cb);
+}
+
+/*
+ Wait for tx confirmation
+*/
+export async function waitForTx(txHash: string) {
+  const provider = getGorrProvider();
+  return provider.waitForTransaction(txHash);
+}
+
+// ============================================================================
+// ADMIN HELPERS (optional – for dashboard)
+// ============================================================================
+
+export async function adminMint(
+  to: string,
+  amountWei: string,
+  token: "GORR" | "USDCc"
+) {
+  return jsonRpc("admin_mint", [to, amountWei, token]);
+}
+
+export async function adminBurn(
+  from: string,
+  amountWei: string,
+  token: "GORR" | "USDCc"
+) {
+  return jsonRpc("admin_burn", [from, amountWei, token]);
+}
+

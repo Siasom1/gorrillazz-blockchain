@@ -22,5 +22,8 @@
   "homepage": "https://github.com/Siasom1/gorrillazz-blockchain#readme",
   "dependencies": {
     "ethers": "^6.16.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   }
 }
